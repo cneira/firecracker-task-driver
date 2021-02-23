@@ -18,8 +18,6 @@
  * along with Firecracker-task-driver. If not, see <http://www.gnu.org/licenses/>.
  */
 
-
-
 package firevm
 
 import (
@@ -63,9 +61,9 @@ func (h *taskHandle) TaskStatus() *drivers.TaskStatus {
 		CompletedAt: h.completedAt,
 		ExitResult:  h.exitResult,
 		DriverAttributes: map[string]string{
-			"Ip":     h.Info.Ip,
-			"Serial": h.Info.Serial,
-			"Pid":    h.Info.Pid,
+			"Ip":         h.Info.Ip,
+			"SocketPath": h.Info.SocketPath,
+			"Pid":        h.Info.Pid,
 		},
 	}
 }

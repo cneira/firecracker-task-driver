@@ -29,9 +29,9 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/containerd/console"
 	firecracker "github.com/firecracker-microvm/firecracker-go-sdk"
 	hclog "github.com/hashicorp/go-hclog"
+	"github.com/hashicorp/nomad/client/lib/fifo"
 	"github.com/hashicorp/nomad/plugins/drivers"
 	log "github.com/sirupsen/logrus"
 )
@@ -103,15 +103,16 @@ func taskConfig2FirecrackerOpts(taskConfig TaskConfig, cfg *drivers.TaskConfig) 
 }
 
 type vminfo struct {
-	Machine *firecracker.Machine
-	tty     string
-	Info    Instance_info
+	Machine    *firecracker.Machine
+	SocketPath string
+	Info       Instance_info
 }
+
 type Instance_info struct {
-	AllocId string
-	Ip      string
-	Serial  string
-	Pid     string
+	AllocId    string
+	Ip         string
+	SocketPath string
+	Pid        string
 }
 
 func (d *Driver) initializeContainer(ctx context.Context, cfg *drivers.TaskConfig, taskConfig TaskConfig) (*vminfo, error) {
@@ -162,18 +163,22 @@ func (d *Driver) initializeContainer(ctx context.Context, cfg *drivers.TaskConfi
 		return nil, fmt.Errorf("Binary, %q, is not executable. Check permissions of binary", firecrackerBinary)
 	}
 
-	tty, ftty, err := console.NewPty()
-
+	stdoutFifo, err := fifo.OpenWriter(cfg.StdoutPath)
 	if err != nil {
-		return nil, fmt.Errorf("Could not create serial console  %v+", err)
+		d.logger.Error("Unable to open logfile %s to redirect firecracker stdout", cfg.StdoutPath)
+	}
+
+	stderrFifo, err := fifo.OpenWriter(cfg.StderrPath)
+	if err != nil {
+		d.logger.Error("Unable to open logfile %s to redirect firecracker stderr", cfg.StderrPath)
 	}
 
 	cmd := firecracker.VMCommandBuilder{}.
 		WithBin(firecrackerBinary).
 		WithSocketPath(fcCfg.SocketPath).
-		WithStdin(tty).
-		WithStdout(tty).
-		WithStderr(nil).
+		WithStdin(nil).
+		WithStdout(stdoutFifo).
+		WithStderr(stderrFifo).
 		Build(ctx)
 
 	machineOpts = append(machineOpts, firecracker.WithProcessRunner(cmd))
@@ -201,22 +206,25 @@ func (d *Driver) initializeContainer(ctx context.Context, cfg *drivers.TaskConfi
 	} else {
 		ip = "No network chosen"
 	}
-	info := Instance_info{Serial: ftty, AllocId: cfg.AllocID,
-		Ip:  ip,
-		Pid: strconv.Itoa(pid)}
+
+	info := Instance_info{
+		SocketPath: m.Cfg.SocketPath,
+		AllocId:    cfg.AllocID,
+		Ip:         ip,
+		Pid:        strconv.Itoa(pid),
+	}
 
 	f, _ := json.MarshalIndent(info, "", " ")
-
 	logfile := fmt.Sprintf("/tmp/%s-%s", cfg.Name, cfg.AllocID)
 
 	d.logger.Info("Writing to", "driver_initialize_container", hclog.Fmt("%v+", logfile))
-	log, err := os.OpenFile(logfile,os.O_CREATE|os.O_APPEND|os.O_WRONLY,0644)
+	log, err := os.OpenFile(logfile, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0644)
 
 	if err != nil {
 		return nil, fmt.Errorf("Failed creating info file=%s err=%v", logfile, err)
 	}
 	defer log.Close()
-	fmt.Fprintf(log,"%s",f)
+	fmt.Fprintf(log, "%s", f)
 
-	return &vminfo{Machine: m, tty: ftty, Info: info}, nil
+	return &vminfo{Machine: m, SocketPath: m.Cfg.SocketPath, Info: info}, nil
 }
