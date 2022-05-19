@@ -255,7 +255,7 @@ func (d *Driver) RecoverTask(handle *drivers.TaskHandle) error {
 	m, err := d.initializeContainer(context.Background(), handle.Config, driverConfig)
 	if err != nil {
 		d.logger.Info("Error RecoverTask k", "driver_cfg", hclog.Fmt("%+v", err))
-		return fmt.Errorf("task with ID %q failed", handle.Config.ID)
+		return fmt.Errorf("task with ID %q failed: %v", handle.Config.ID, err)
 	}
 
 	h := &taskHandle{
@@ -294,7 +294,7 @@ func (d *Driver) StartTask(cfg *drivers.TaskConfig) (*drivers.TaskHandle, *drive
 	m, err := d.initializeContainer(context.Background(), cfg, driverConfig)
 	if err != nil {
 		d.logger.Info("Error starting firecracker vm", "driver_cfg", hclog.Fmt("%+v", err))
-		return nil, nil, fmt.Errorf("task with ID %q failed", cfg.ID)
+		return nil, nil, fmt.Errorf("task with ID %q failed: %v", cfg.ID, err)
 	}
 
 	h := &taskHandle{
