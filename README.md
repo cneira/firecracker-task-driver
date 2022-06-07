@@ -16,7 +16,11 @@ Requirements
 - ip6tables package
 - [Container networking plugins (Firecracker branch)](https://github.com/cneira/plugins)
 - [tc-redirect-tap](https://github.com/awslabs/tc-redirect-tap)
-- [Firecracker binary](https://github.com/firecracker-microvm/firecracker/releases/download/v0.16.0/firecracker-v0.16.0)
+- [Firecracker binary](https://github.com/firecracker-microvm/firecracker/releases/download/v0.25.2/firecracker-v0.25.2-x86_64.tgz) 
+
+
+Note:
+The last version of firecracker that works with this nomad plugin is : 0.25.2, more work is needed to make it work with latest releases.
 
 
 Installation
@@ -358,8 +362,8 @@ Kernel 4.14.225 on an x86_64
       
 It's also possible to support the project on [Patreon](https://www.patreon.com/neirac)  
 
-I work on this project on  my free time and my country is not on the list available for
-github sponsors so any help for me continue working on this is appreciated.
+**I work on this project on  my free time and my country is not on the list available for
+github sponsors so any help for me continue working on this is appreciated.**
     
 ## References
 
