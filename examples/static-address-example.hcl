@@ -10,11 +10,11 @@ job "test1" {
     task "test01" {
       driver = "firecracker-task-driver"
       config {
-       KernelImage = "/home/build/hello-vmlinux.bin" 
-       Firecracker = "/home/build/firecracker" 
+       KernelImage = "/home/neirac/rootfs/hello-vmlinux.bin" 
+       Firecracker = "/home/neirac/versions/firecracker" 
        Vcpus = 1 
        Mem = 128
-       BootDisk = "/home/build/rootfs.ext4"
+       BootDisk = "/home/neirac/rootfs/hello-rootfs.ext4"
        Nic =  {
 	Ip="172.17.0.1/16"	
 	Gateway = "192.168.1.1"

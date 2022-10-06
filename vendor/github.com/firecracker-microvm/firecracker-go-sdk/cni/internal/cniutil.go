@@ -1,4 +1,4 @@
-// Copyright 2018-2019 Amazon.com, Inc. or its affiliates. All Rights Reserved.
+// Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License"). You may
 // not use this file except in compliance with the License. A copy of the
@@ -16,8 +16,7 @@ package internal
 import (
 	"fmt"
 
-	"github.com/containernetworking/cni/pkg/types/current"
-	"github.com/pkg/errors"
+	current "github.com/containernetworking/cni/pkg/types/100"
 )
 
 // InterfaceIPs returns the IPs associated with the interface possessing the provided name and
@@ -78,8 +77,7 @@ func VMTapPair(
 ) {
 	vmIfaces, otherIfaces := FilterBySandbox(vmID, result.Interfaces...)
 	if len(vmIfaces) > 1 {
-		return nil, nil, errors.Errorf(
-			"expected to find at most 1 interface in sandbox %q, but instead found %d",
+		return nil, nil, fmt.Errorf("expected to find at most 1 interface in sandbox %q, but instead found %d",
 			vmID, len(vmIfaces))
 	} else if len(vmIfaces) == 0 {
 		return nil, nil, LinkNotFoundError{device: fmt.Sprintf("pseudo-device for %s", vmID)}
@@ -94,8 +92,7 @@ func VMTapPair(
 
 	tapIfaces := IfacesWithName(tapName, otherIfaces...)
 	if len(tapIfaces) > 1 {
-		return nil, nil, errors.Errorf(
-			"expected to find at most 1 interface with name %q, but instead found %d",
+		return nil, nil, fmt.Errorf("expected to find at most 1 interface with name %q, but instead found %d",
 			tapName, len(tapIfaces))
 	} else if len(tapIfaces) == 0 {
 		return nil, nil, LinkNotFoundError{device: tapName}

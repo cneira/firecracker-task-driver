@@ -1,4 +1,4 @@
-// Copyright 2018-2019 Amazon.com, Inc. or its affiliates. All Rights Reserved.
+// Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License"). You may
 // not use this file except in compliance with the License. A copy of the
@@ -33,9 +33,8 @@ import (
 	"strings"
 
 	"github.com/containernetworking/cni/pkg/types"
-	"github.com/containernetworking/cni/pkg/types/current"
+	current "github.com/containernetworking/cni/pkg/types/100"
 	"github.com/containernetworking/plugins/pkg/ns"
-	"github.com/pkg/errors"
 
 	"github.com/firecracker-microvm/firecracker-go-sdk/cni/internal"
 )
@@ -53,6 +52,9 @@ type StaticNetworkConf struct {
 	// NetNSPath is the path to the bind-mounted network namespace in which the VM's
 	// tap device was created and thus where the VM should execute.
 	NetNSPath string
+	// VMIfName (optional) is interface name to configure. If left blank, config
+	// is applied to the first (default) interface.
+	VMIfName string
 
 	// VMMacAddr is the mac address that callers should configure their VM to use internally.
 	VMMacAddr string
@@ -117,9 +119,8 @@ func (c StaticNetworkConf) IPBootParam() string {
 	// the "hostname" field actually just configures a hostname value for DHCP requests, thus no need to set it
 	const dhcpHostname = ""
 
-	// TODO(sipsma) we are assuming there is only one network device
-	// Just use the only network device present in the VM
-	const device = ""
+	// If blank, use the only network device present in the VM
+	device := c.VMIfName
 
 	// Don't do any autoconfiguration (i.e. DHCP, BOOTP, RARP)
 	const autoconfiguration = "off"
@@ -151,7 +152,7 @@ func (c StaticNetworkConf) IPBootParam() string {
 func StaticNetworkConfFrom(result types.Result, containerID string) (*StaticNetworkConf, error) {
 	currentResult, err := current.NewResultFromResult(result)
 	if err != nil {
-		return nil, errors.Wrap(err, "failed to parse cni result")
+		return nil, fmt.Errorf("failed to parse cni result: %w", err)
 	}
 
 	// As specified in the vmconf package docstring, we are looking for an interface who's
@@ -168,14 +169,14 @@ func StaticNetworkConfFrom(result types.Result, containerID string) (*StaticNetw
 	// find the IP associated with the VM iface
 	vmIPs := internal.InterfaceIPs(currentResult, vmIface.Name, vmIface.Sandbox)
 	if len(vmIPs) != 1 {
-		return nil, errors.Errorf("expected to find 1 IP for vm interface %q, but instead found %+v",
+		return nil, fmt.Errorf("expected to find 1 IP for vm interface %q, but instead found %+v",
 			vmIface.Name, vmIPs)
 	}
 	vmIP := vmIPs[0]
 
 	netNS, err := ns.GetNS(tapIface.Sandbox)
 	if err != nil {
-		return nil, errors.Wrapf(err, "failed to find netns at path %q", tapIface.Sandbox)
+		return nil, fmt.Errorf("failed to find netns at path %q: %w", tapIface.Sandbox, err)
 	}
 
 	tapMTU, err := mtuOf(tapIface.Name, netNS, internal.DefaultNetlinkOps())
@@ -202,15 +203,16 @@ func mtuOf(ifaceName string, netNS ns.NetNS, netlinkOps internal.NetlinkOps) (in
 	err := netNS.Do(func(_ ns.NetNS) error {
 		link, err := netlinkOps.GetLink(ifaceName)
 		if err != nil {
-			return errors.Wrapf(err, "failed to find device %q in netns %q",
-				ifaceName, netNS.Path())
+			return fmt.Errorf("failed to find device %q in netns %q: %w",
+				ifaceName, netNS.Path(), err)
+
 		}
 		mtu = link.Attrs().MTU
 
 		return nil
 	})
 	if err != nil {
-		return 0, errors.Wrap(err, "failed to find MTU")
+		return 0, fmt.Errorf("failed to find MTU: %w", err)
 	}
 
 	return mtu, nil

@@ -1,4 +1,4 @@
-// Copyright 2018 Amazon.com, Inc. or its affiliates. All Rights Reserved.
+// Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License"). You may
 // not use this file except in compliance with the License. A copy of the
@@ -45,5 +45,24 @@ func WithLogger(logger *logrus.Entry) Opt {
 func WithProcessRunner(cmd *exec.Cmd) Opt {
 	return func(machine *Machine) {
 		machine.cmd = cmd
+	}
+}
+
+// WithSnapshotOpt allows configuration of the snapshot config
+// to be passed to LoadSnapshot
+type WithSnapshotOpt func(*SnapshotConfig)
+
+// WithSnapshot will allow for the machine to start using a given snapshot.
+func WithSnapshot(memFilePath, snapshotPath string, opts ...WithSnapshotOpt) Opt {
+	return func(m *Machine) {
+		m.Cfg.Snapshot.MemFilePath = memFilePath
+		m.Cfg.Snapshot.SnapshotPath = snapshotPath
+
+		for _, opt := range opts {
+			opt(&m.Cfg.Snapshot)
+		}
+
+		m.Handlers.Validation = loadSnapshotValidationHandlerList
+		m.Handlers.FcInit = loadSnapshotHandlerList
 	}
 }

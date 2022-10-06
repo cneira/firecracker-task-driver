@@ -12,29 +12,29 @@ import (
 // "zone", "rack", etc.
 //
 // According to CSI, there are a few requirements for the keys within this map:
-// - Valid keys have two segments: an OPTIONAL prefix and name, separated
-//   by a slash (/), for example: "com.company.example/zone".
-// - The key name segment is REQUIRED. The prefix is OPTIONAL.
-// - The key name MUST be 63 characters or less, begin and end with an
-//   alphanumeric character ([a-z0-9A-Z]), and contain only dashes (-),
-//   underscores (_), dots (.), or alphanumerics in between, for example
-//   "zone".
-// - The key prefix MUST be 63 characters or less, begin and end with a
-//   lower-case alphanumeric character ([a-z0-9]), contain only
-//   dashes (-), dots (.), or lower-case alphanumerics in between, and
-//   follow domain name notation format
-//   (https://tools.ietf.org/html/rfc1035#section-2.3.1).
-// - The key prefix SHOULD include the plugin's host company name and/or
-//   the plugin name, to minimize the possibility of collisions with keys
-//   from other plugins.
-// - If a key prefix is specified, it MUST be identical across all
-//   topology keys returned by the SP (across all RPCs).
-// - Keys MUST be case-insensitive. Meaning the keys "Zone" and "zone"
-//   MUST not both exist.
-// - Each value (topological segment) MUST contain 1 or more strings.
-// - Each string MUST be 63 characters or less and begin and end with an
-//   alphanumeric character with '-', '_', '.', or alphanumerics in
-//   between.
+//   - Valid keys have two segments: an OPTIONAL prefix and name, separated
+//     by a slash (/), for example: "com.company.example/zone".
+//   - The key name segment is REQUIRED. The prefix is OPTIONAL.
+//   - The key name MUST be 63 characters or less, begin and end with an
+//     alphanumeric character ([a-z0-9A-Z]), and contain only dashes (-),
+//     underscores (_), dots (.), or alphanumerics in between, for example
+//     "zone".
+//   - The key prefix MUST be 63 characters or less, begin and end with a
+//     lower-case alphanumeric character ([a-z0-9]), contain only
+//     dashes (-), dots (.), or lower-case alphanumerics in between, and
+//     follow domain name notation format
+//     (https://tools.ietf.org/html/rfc1035#section-2.3.1).
+//   - The key prefix SHOULD include the plugin's host company name and/or
+//     the plugin name, to minimize the possibility of collisions with keys
+//     from other plugins.
+//   - If a key prefix is specified, it MUST be identical across all
+//     topology keys returned by the SP (across all RPCs).
+//   - Keys MUST be case-insensitive. Meaning the keys "Zone" and "zone"
+//     MUST not both exist.
+//   - Each value (topological segment) MUST contain 1 or more strings.
+//   - Each string MUST be 63 characters or less and begin and end with an
+//     alphanumeric character with '-', '_', '.', or alphanumerics in
+//     between.
 //
 // However, Nomad applies lighter restrictions to these, as they are already
 // only referenced by plugin within the scheduler and as such collisions and
@@ -60,6 +60,50 @@ func (t *CSITopology) Equal(o *CSITopology) bool {
 	}
 
 	return helper.CompareMapStringString(t.Segments, o.Segments)
+}
+
+func (t *CSITopology) MatchFound(o []*CSITopology) bool {
+	if t == nil || o == nil || len(o) == 0 {
+		return false
+	}
+
+	for _, other := range o {
+		if t.Equal(other) {
+			return true
+		}
+	}
+	return false
+}
+
+// CSITopologyRequest are the topologies submitted as options to the
+// storage provider at the time the volume was created. The storage
+// provider will return a single topology.
+type CSITopologyRequest struct {
+	Required  []*CSITopology
+	Preferred []*CSITopology
+}
+
+func (tr *CSITopologyRequest) Equal(o *CSITopologyRequest) bool {
+	if tr == nil && o == nil {
+		return true
+	}
+	if tr == nil && o != nil || tr != nil && o == nil {
+		return false
+	}
+	if len(tr.Required) != len(o.Required) || len(tr.Preferred) != len(o.Preferred) {
+		return false
+	}
+	for i, topo := range tr.Required {
+		if !topo.Equal(o.Required[i]) {
+			return false
+		}
+	}
+	for i, topo := range tr.Preferred {
+		if !topo.Equal(o.Preferred[i]) {
+			return false
+		}
+	}
+	return true
 }
 
 // CSINodeInfo is the fingerprinted data from a CSI Plugin that is specific to
@@ -95,6 +139,15 @@ type CSINodeInfo struct {
 	// RequiresNodeStageVolume indicates whether the client should Stage/Unstage
 	// volumes on this node.
 	RequiresNodeStageVolume bool
+
+	// SupportsStats indicates plugin support for GET_VOLUME_STATS
+	SupportsStats bool
+
+	// SupportsExpand indicates plugin support for EXPAND_VOLUME
+	SupportsExpand bool
+
+	// SupportsCondition indicates plugin support for VOLUME_CONDITION
+	SupportsCondition bool
 }
 
 func (n *CSINodeInfo) Copy() *CSINodeInfo {
@@ -112,23 +165,50 @@ func (n *CSINodeInfo) Copy() *CSINodeInfo {
 // CSIControllerInfo is the fingerprinted data from a CSI Plugin that is specific to
 // the Controller API.
 type CSIControllerInfo struct {
+
+	// SupportsCreateDelete indicates plugin support for CREATE_DELETE_VOLUME
+	SupportsCreateDelete bool
+
+	// SupportsPublishVolume is true when the controller implements the
+	// methods required to attach and detach volumes. If this is false Nomad
+	// should skip the controller attachment flow.
+	SupportsAttachDetach bool
+
+	// SupportsListVolumes is true when the controller implements the
+	// ListVolumes RPC. NOTE: This does not guarantee that attached nodes will
+	// be returned unless SupportsListVolumesAttachedNodes is also true.
+	SupportsListVolumes bool
+
+	// SupportsGetCapacity indicates plugin support for GET_CAPACITY
+	SupportsGetCapacity bool
+
+	// SupportsCreateDeleteSnapshot indicates plugin support for
+	// CREATE_DELETE_SNAPSHOT
+	SupportsCreateDeleteSnapshot bool
+
+	// SupportsListSnapshots indicates plugin support for LIST_SNAPSHOTS
+	SupportsListSnapshots bool
+
+	// SupportsClone indicates plugin support for CLONE_VOLUME
+	SupportsClone bool
+
 	// SupportsReadOnlyAttach is set to true when the controller returns the
 	// ATTACH_READONLY capability.
 	SupportsReadOnlyAttach bool
 
-	// SupportsPublishVolume is true when the controller implements the methods
-	// required to attach and detach volumes. If this is false Nomad should skip
-	// the controller attachment flow.
-	SupportsAttachDetach bool
+	// SupportsExpand indicates plugin support for EXPAND_VOLUME
+	SupportsExpand bool
 
-	// SupportsListVolumes is true when the controller implements the ListVolumes
-	// RPC. NOTE: This does not guaruntee that attached nodes will be returned
-	// unless SupportsListVolumesAttachedNodes is also true.
-	SupportsListVolumes bool
-
-	// SupportsListVolumesAttachedNodes indicates whether the plugin will return
-	// attached nodes data when making ListVolume RPCs
+	// SupportsListVolumesAttachedNodes indicates whether the plugin will
+	// return attached nodes data when making ListVolume RPCs (plugin support
+	// for LIST_VOLUMES_PUBLISHED_NODES)
 	SupportsListVolumesAttachedNodes bool
+
+	// SupportsCondition indicates plugin support for VOLUME_CONDITION
+	SupportsCondition bool
+
+	// SupportsGet indicates plugin support for GET_VOLUME
+	SupportsGet bool
 }
 
 func (c *CSIControllerInfo) Copy() *CSIControllerInfo {
@@ -247,15 +327,15 @@ func (di *DriverInfo) MergeHealthCheck(other *DriverInfo) {
 	di.UpdateTime = other.UpdateTime
 }
 
-// MergeFingerprint merges information from fingerprinting a node for a driver
-// into a node's driver info for that driver.
+// MergeFingerprintInfo merges information from fingerprinting a node for a
+// driver into a node's driver info for that driver.
 func (di *DriverInfo) MergeFingerprintInfo(other *DriverInfo) {
 	di.Detected = other.Detected
 	di.Attributes = other.Attributes
 }
 
-// DriverInfo determines if two driver info objects are equal..As this is used
-// in the process of health checking, we only check the fields that are
+// HealthCheckEquals determines if two driver info objects are equal. As this
+// is used in the process of health checking, we only check the fields that are
 // computed by the health checker. In the future, this will be merged.
 func (di *DriverInfo) HealthCheckEquals(other *DriverInfo) bool {
 	if di == nil && other == nil {

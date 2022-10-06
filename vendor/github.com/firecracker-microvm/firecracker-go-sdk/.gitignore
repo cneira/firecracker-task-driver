@@ -1,4 +1,13 @@
 firecracker
 jailer
 firecracker-*
+jailer-*
 vmlinux
+root-drive.img
+TestPID.img
+build/
+testdata/fc.stamp
+testdata/bin/
+testdata/logs/
+testdata/ltag
+testdata/release-*

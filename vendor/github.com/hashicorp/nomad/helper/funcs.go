@@ -3,6 +3,7 @@ package helper
 import (
 	"crypto/sha512"
 	"fmt"
+	"net/http"
 	"path/filepath"
 	"reflect"
 	"regexp"
@@ -11,6 +12,7 @@ import (
 
 	multierror "github.com/hashicorp/go-multierror"
 	"github.com/hashicorp/hcl/hcl/ast"
+	"golang.org/x/exp/constraints"
 )
 
 // validUUID is used to check if a given string looks like a UUID
@@ -68,74 +70,16 @@ func HashUUID(input string) (output string, hashed bool) {
 	return output, true
 }
 
-// boolToPtr returns the pointer to a boolean
-func BoolToPtr(b bool) *bool {
-	return &b
-}
-
-// IntToPtr returns the pointer to an int
-func IntToPtr(i int) *int {
-	return &i
-}
-
-// Int8ToPtr returns the pointer to an int8
-func Int8ToPtr(i int8) *int8 {
-	return &i
-}
-
-// Int64ToPtr returns the pointer to an int
-func Int64ToPtr(i int64) *int64 {
-	return &i
-}
-
-// Uint64ToPtr returns the pointer to an uint64
-func Uint64ToPtr(u uint64) *uint64 {
-	return &u
-}
-
-// UintToPtr returns the pointer to an uint
-func UintToPtr(u uint) *uint {
-	return &u
-}
-
-// StringToPtr returns the pointer to a string
-func StringToPtr(str string) *string {
-	return &str
-}
-
-// TimeToPtr returns the pointer to a time.Duration.
-func TimeToPtr(t time.Duration) *time.Duration {
-	return &t
-}
-
-// CompareTimePtrs return true if a is the same as b.
-func CompareTimePtrs(a, b *time.Duration) bool {
-	if a == nil || b == nil {
-		return a == b
-	}
-	return *a == *b
-}
-
-// Float64ToPtr returns the pointer to an float64
-func Float64ToPtr(f float64) *float64 {
-	return &f
-}
-
-func IntMin(a, b int) int {
+// Min returns the minimum of a and b.
+func Min[T constraints.Ordered](a, b T) T {
 	if a < b {
 		return a
 	}
 	return b
 }
 
-func IntMax(a, b int) int {
-	if a > b {
-		return a
-	}
-	return b
-}
-
-func Uint64Max(a, b uint64) uint64 {
+// Max returns the maximum of a and b.
+func Max[T constraints.Ordered](a, b T) T {
 	if a > b {
 		return a
 	}
@@ -164,6 +108,14 @@ func SliceStringToSet(s []string) map[string]struct{} {
 		m[k] = struct{}{}
 	}
 	return m
+}
+
+func SetToSliceString(set map[string]struct{}) []string {
+	flattened := make([]string, 0, len(set))
+	for x := range set {
+		flattened = append(flattened, x)
+	}
+	return flattened
 }
 
 // SliceStringIsSubset returns whether the smaller set of strings is a subset of
@@ -298,7 +250,24 @@ func CompareMapStringString(a, b map[string]string) bool {
 	return true
 }
 
-// Helpers for copying generic structures.
+// CopyMap creates a copy of m. Struct values are not deep copies.
+//
+// If m is nil or contains no elements, the return value is nil.
+func CopyMap[M ~map[K]V, K comparable, V any](m M) M {
+	if len(m) == 0 {
+		return nil
+	}
+
+	result := make(M, len(m))
+	for k, v := range m {
+		result[k] = v
+	}
+	return result
+}
+
+// CopyMapStringString creates a copy of m.
+//
+// Deprecated; use CopyMap instead.
 func CopyMapStringString(m map[string]string) map[string]string {
 	l := len(m)
 	if l == 0 {
@@ -312,6 +281,9 @@ func CopyMapStringString(m map[string]string) map[string]string {
 	return c
 }
 
+// CopyMapStringStruct creates a copy of m.
+//
+// Deprecated; use CopyMap instead.
 func CopyMapStringStruct(m map[string]struct{}) map[string]struct{} {
 	l := len(m)
 	if l == 0 {
@@ -325,6 +297,9 @@ func CopyMapStringStruct(m map[string]struct{}) map[string]struct{} {
 	return c
 }
 
+// CopyMapStringInterface creates a copy of m.
+//
+// Deprecated; use CopyMap instead.
 func CopyMapStringInterface(m map[string]interface{}) map[string]interface{} {
 	l := len(m)
 	if l == 0 {
@@ -338,6 +313,32 @@ func CopyMapStringInterface(m map[string]interface{}) map[string]interface{} {
 	return c
 }
 
+// MergeMapStringString will merge two maps into one. If a duplicate key exists
+// the value in the second map will replace the value in the first map. If both
+// maps are empty or nil this returns an empty map.
+func MergeMapStringString(m map[string]string, n map[string]string) map[string]string {
+	if len(m) == 0 && len(n) == 0 {
+		return map[string]string{}
+	}
+	if len(m) == 0 {
+		return n
+	}
+	if len(n) == 0 {
+		return m
+	}
+
+	result := CopyMapStringString(m)
+
+	for k, v := range n {
+		result[k] = v
+	}
+
+	return result
+}
+
+// CopyMapStringInt creates a copy of m.
+//
+// Deprecated; use CopyMap instead.
 func CopyMapStringInt(m map[string]int) map[string]int {
 	l := len(m)
 	if l == 0 {
@@ -351,6 +352,9 @@ func CopyMapStringInt(m map[string]int) map[string]int {
 	return c
 }
 
+// CopyMapStringFloat64 creates a copy of m.
+//
+// Deprecated; use CopyMap instead.
 func CopyMapStringFloat64(m map[string]float64) map[string]float64 {
 	l := len(m)
 	if l == 0 {
@@ -379,6 +383,9 @@ func CopyMapStringSliceString(m map[string][]string) map[string][]string {
 	return c
 }
 
+// CopySliceString creates a copy of s.
+//
+// Deprecated; use slices.Clone instead.
 func CopySliceString(s []string) []string {
 	l := len(s)
 	if l == 0 {
@@ -390,6 +397,9 @@ func CopySliceString(s []string) []string {
 	return c
 }
 
+// CopySliceInt creates a copy of s.
+//
+// Deprecated; use slices.Clone instead.
 func CopySliceInt(s []int) []int {
 	l := len(s)
 	if l == 0 {
@@ -558,16 +568,71 @@ func CheckNamespaceScope(provided string, requested []string) []string {
 	return nil
 }
 
-// PathEscapesSandbox returns whether previously cleaned path inside the
-// sandbox directory (typically this will be the allocation directory)
-// escapes.
-func PathEscapesSandbox(sandboxDir, path string) bool {
-	rel, err := filepath.Rel(sandboxDir, path)
-	if err != nil {
-		return true
+// StopFunc is used to stop a time.Timer created with NewSafeTimer
+type StopFunc func()
+
+// NewSafeTimer creates a time.Timer but does not panic if duration is <= 0.
+//
+// Using a time.Timer is recommended instead of time.After when it is necessary
+// to avoid leaking goroutines (e.g. in a select inside a loop).
+//
+// Returns the time.Timer and also a StopFunc, forcing the caller to deal
+// with stopping the time.Timer to avoid leaking a goroutine.
+func NewSafeTimer(duration time.Duration) (*time.Timer, StopFunc) {
+	if duration <= 0 {
+		// Avoid panic by using the smallest positive value. This is close enough
+		// to the behavior of time.After(0), which this helper is intended to
+		// replace.
+		// https://go.dev/play/p/EIkm9MsPbHY
+		duration = 1
 	}
-	if strings.HasPrefix(rel, "..") {
-		return true
+
+	t := time.NewTimer(duration)
+	cancel := func() {
+		t.Stop()
 	}
-	return false
+
+	return t, cancel
+}
+
+// IsMethodHTTP returns whether s is a known HTTP method, ignoring case.
+func IsMethodHTTP(s string) bool {
+	switch strings.ToUpper(s) {
+	case http.MethodGet:
+	case http.MethodHead:
+	case http.MethodPost:
+	case http.MethodPut:
+	case http.MethodPatch:
+	case http.MethodDelete:
+	case http.MethodConnect:
+	case http.MethodOptions:
+	case http.MethodTrace:
+	default:
+		return false
+	}
+	return true
+}
+
+// EqualsFunc represents a type implementing the Equals method.
+type EqualsFunc[A any] interface {
+	Equals(A) bool
+}
+
+// ElementsEquals returns true if slices a and b contain the same elements (in
+// no particular order) using the Equals function defined on their type for
+// comparison.
+func ElementsEquals[T EqualsFunc[T]](a, b []T) bool {
+	if len(a) != len(b) {
+		return false
+	}
+OUTER:
+	for _, item := range a {
+		for _, other := range b {
+			if item.Equals(other) {
+				continue OUTER
+			}
+		}
+		return false
+	}
+	return true
 }
