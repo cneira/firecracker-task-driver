@@ -1,3 +1,6 @@
+// Copyright (c) HashiCorp, Inc.
+// SPDX-License-Identifier: MPL-2.0
+
 package drivers
 
 import (
@@ -14,7 +17,7 @@ import (
 var _ plugin.GRPCPlugin = &PluginDriver{}
 
 // PluginDriver wraps a DriverPlugin and implements go-plugins GRPCPlugin
-// interface to expose the the interface over gRPC
+// interface to expose the interface over gRPC
 type PluginDriver struct {
 	plugin.NetRPCUnsupportedPlugin
 	impl   DriverPlugin

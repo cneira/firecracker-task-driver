@@ -1,4 +1,9 @@
+// Copyright (c) HashiCorp, Inc.
+// SPDX-License-Identifier: BUSL-1.1
+
 package structs
+
+import "maps"
 
 // DeviceAccounter is used to account for device usage on a node. It can detect
 // when a node is oversubscribed and can be used for deciding what devices are
@@ -17,6 +22,25 @@ type DeviceAccounterInstance struct {
 	// Instances is a mapping of the device IDs to their usage.
 	// Only a value of 0 indicates that the instance is unused.
 	Instances map[string]int
+}
+
+// Locality returns the NodeDeviceLocality of the instance of the specific deviceID.
+//
+// If no instance matching the deviceID is found, nil is returned.
+func (dai *DeviceAccounterInstance) GetLocality(instanceID string) *NodeDeviceLocality {
+	for _, instance := range dai.Device.Instances {
+		if instance.ID == instanceID {
+			return instance.Locality.Copy()
+		}
+	}
+	return nil
+}
+
+func (dai *DeviceAccounterInstance) Copy() *DeviceAccounterInstance {
+	return &DeviceAccounterInstance{
+		Device:    dai.Device.Copy(),
+		Instances: maps.Clone(dai.Instances),
+	}
 }
 
 // NewDeviceAccounter returns a new device accounter. The node is used to
@@ -55,13 +79,21 @@ func NewDeviceAccounter(n *Node) *DeviceAccounter {
 	return d
 }
 
+func (d *DeviceAccounter) Copy() *DeviceAccounter {
+	devices := make(map[DeviceIdTuple]*DeviceAccounterInstance, len(d.Devices))
+	for k, v := range d.Devices {
+		devices[k] = v.Copy()
+	}
+	return &DeviceAccounter{Devices: devices}
+}
+
 // AddAllocs takes a set of allocations and internally marks which devices are
 // used. If a device is used more than once by the set of passed allocations,
 // the collision will be returned as true.
 func (d *DeviceAccounter) AddAllocs(allocs []*Allocation) (collision bool) {
 	for _, a := range allocs {
 		// Filter any terminal allocation
-		if a.TerminalStatus() {
+		if a.ClientTerminalStatus() {
 			continue
 		}
 

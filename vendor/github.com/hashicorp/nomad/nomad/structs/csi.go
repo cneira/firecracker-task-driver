@@ -1,12 +1,18 @@
+// Copyright (c) HashiCorp, Inc.
+// SPDX-License-Identifier: BUSL-1.1
+
 package structs
 
 import (
 	"errors"
 	"fmt"
+	"maps"
+	"slices"
 	"strings"
 	"time"
 
 	multierror "github.com/hashicorp/go-multierror"
+
 	"github.com/hashicorp/nomad/helper"
 )
 
@@ -18,11 +24,11 @@ const CSISocketName = "csi.sock"
 // where Nomad will expect plugins to create intermediary mounts for volumes.
 const CSIIntermediaryDirname = "volumes"
 
-// VolumeTypeCSI is the type in the volume stanza of a TaskGroup
+// VolumeTypeCSI is the type in the volume block of a TaskGroup
 const VolumeTypeCSI = "csi"
 
 // CSIPluginType is an enum string that encapsulates the valid options for a
-// CSIPlugin stanza's Type. These modes will allow the plugin to be used in
+// CSIPlugin block's Type. These modes will allow the plugin to be used in
 // different ways by the client.
 type CSIPluginType string
 
@@ -78,6 +84,25 @@ type TaskCSIPluginConfig struct {
 	HealthTimeout time.Duration `mapstructure:"health_timeout" hcl:"health_timeout,optional"`
 }
 
+func (t *TaskCSIPluginConfig) Equal(o *TaskCSIPluginConfig) bool {
+	if t == nil || o == nil {
+		return t == o
+	}
+	switch {
+	case t.ID != o.ID:
+		return false
+	case t.Type != o.Type:
+		return false
+	case t.MountDir != o.MountDir:
+		return false
+	case t.StagePublishBaseDir != o.StagePublishBaseDir:
+		return false
+	case t.HealthTimeout != o.HealthTimeout:
+		return false
+	}
+	return true
+}
+
 func (t *TaskCSIPluginConfig) Copy() *TaskCSIPluginConfig {
 	if t == nil {
 		return nil
@@ -106,15 +131,6 @@ const (
 	CSIVolumeAttachmentModeFilesystem  CSIVolumeAttachmentMode = "file-system"
 )
 
-func ValidCSIVolumeAttachmentMode(attachmentMode CSIVolumeAttachmentMode) bool {
-	switch attachmentMode {
-	case CSIVolumeAttachmentModeBlockDevice, CSIVolumeAttachmentModeFilesystem:
-		return true
-	default:
-		return false
-	}
-}
-
 // CSIVolumeAccessMode indicates how a volume should be used in a storage topology
 // e.g whether the provider should make the volume available concurrently.
 type CSIVolumeAccessMode string
@@ -129,31 +145,6 @@ const (
 	CSIVolumeAccessModeMultiNodeSingleWriter CSIVolumeAccessMode = "multi-node-single-writer"
 	CSIVolumeAccessModeMultiNodeMultiWriter  CSIVolumeAccessMode = "multi-node-multi-writer"
 )
-
-// ValidCSIVolumeAccessMode checks to see that the provided access mode is a valid,
-// non-empty access mode.
-func ValidCSIVolumeAccessMode(accessMode CSIVolumeAccessMode) bool {
-	switch accessMode {
-	case CSIVolumeAccessModeSingleNodeReader, CSIVolumeAccessModeSingleNodeWriter,
-		CSIVolumeAccessModeMultiNodeReader, CSIVolumeAccessModeMultiNodeSingleWriter,
-		CSIVolumeAccessModeMultiNodeMultiWriter:
-		return true
-	default:
-		return false
-	}
-}
-
-// ValidCSIVolumeWriteAccessMode checks for a writable access mode.
-func ValidCSIVolumeWriteAccessMode(accessMode CSIVolumeAccessMode) bool {
-	switch accessMode {
-	case CSIVolumeAccessModeSingleNodeWriter,
-		CSIVolumeAccessModeMultiNodeSingleWriter,
-		CSIVolumeAccessModeMultiNodeMultiWriter:
-		return true
-	default:
-		return false
-	}
-}
 
 // CSIMountOptions contain optional additional configuration that can be used
 // when specifying that a Volume should be used with VolumeAccessTypeMount.
@@ -174,7 +165,7 @@ func (o *CSIMountOptions) Copy() *CSIMountOptions {
 	}
 
 	no := *o
-	no.MountFlags = helper.CopySliceString(o.MountFlags)
+	no.MountFlags = slices.Clone(o.MountFlags)
 	return &no
 }
 
@@ -197,13 +188,10 @@ func (o *CSIMountOptions) Equal(p *CSIMountOptions) bool {
 	if o == nil || p == nil {
 		return false
 	}
-
 	if o.FSType != p.FSType {
 		return false
 	}
-
-	return helper.CompareSliceSetString(
-		o.MountFlags, p.MountFlags)
+	return helper.SliceSetEq(o.MountFlags, p.MountFlags)
 }
 
 // CSIMountOptions implements the Stringer and GoStringer interfaces to prevent
@@ -325,6 +313,10 @@ type CSIVolume struct {
 
 	CreateIndex uint64
 	ModifyIndex uint64
+
+	// Creation and modification times stored as UnixNano
+	CreateTime int64
+	ModifyTime int64
 }
 
 // GetID implements the IDGetter interface, required for pagination.
@@ -367,20 +359,30 @@ type CSIVolListStub struct {
 	Schedulable         bool
 	PluginID            string
 	Provider            string
+	ControllerRequired  bool
 	ControllersHealthy  int
 	ControllersExpected int
 	NodesHealthy        int
 	NodesExpected       int
-	CreateIndex         uint64
-	ModifyIndex         uint64
+	ResourceExhausted   time.Time
+
+	CreateIndex uint64
+	ModifyIndex uint64
+
+	// Create and modify times stored as UnixNano
+	CreateTime int64
+	ModifyTime int64
 }
 
 // NewCSIVolume creates the volume struct. No side-effects
 func NewCSIVolume(volumeID string, index uint64) *CSIVolume {
+	now := time.Now().UnixNano()
 	out := &CSIVolume{
 		ID:          volumeID,
 		CreateIndex: index,
 		ModifyIndex: index,
+		CreateTime:  now,
+		ModifyTime:  now,
 	}
 
 	out.newStructs()
@@ -409,7 +411,7 @@ func (v *CSIVolume) RemoteID() string {
 }
 
 func (v *CSIVolume) Stub() *CSIVolListStub {
-	stub := CSIVolListStub{
+	return &CSIVolListStub{
 		ID:                  v.ID,
 		Namespace:           v.Namespace,
 		Name:                v.Name,
@@ -422,15 +424,17 @@ func (v *CSIVolume) Stub() *CSIVolListStub {
 		Schedulable:         v.Schedulable,
 		PluginID:            v.PluginID,
 		Provider:            v.Provider,
+		ControllerRequired:  v.ControllerRequired,
 		ControllersHealthy:  v.ControllersHealthy,
 		ControllersExpected: v.ControllersExpected,
 		NodesHealthy:        v.NodesHealthy,
 		NodesExpected:       v.NodesExpected,
+		ResourceExhausted:   v.ResourceExhausted,
 		CreateIndex:         v.CreateIndex,
 		ModifyIndex:         v.ModifyIndex,
+		CreateTime:          v.CreateTime,
+		ModifyTime:          v.ModifyTime,
 	}
-
-	return &stub
 }
 
 // ReadSchedulable determines if the volume is potentially schedulable
@@ -792,20 +796,6 @@ func (v *CSIVolume) Merge(other *CSIVolume) error {
 			"volume snapshot ID cannot be updated"))
 	}
 
-	// must be compatible with capacity range
-	// TODO: when ExpandVolume is implemented we'll need to update
-	// this logic https://github.com/hashicorp/nomad/issues/10324
-	if v.Capacity != 0 {
-		if other.RequestedCapacityMax < v.Capacity ||
-			other.RequestedCapacityMin > v.Capacity {
-			errs = multierror.Append(errs, errors.New(
-				"volume requested capacity update was not compatible with existing capacity"))
-		} else {
-			v.RequestedCapacityMin = other.RequestedCapacityMin
-			v.RequestedCapacityMax = other.RequestedCapacityMax
-		}
-	}
-
 	// must be compatible with volume_capabilities
 	if v.AccessMode != CSIVolumeAccessModeUnknown ||
 		v.AttachmentMode != CSIVolumeAttachmentModeUnknown {
@@ -836,29 +826,40 @@ func (v *CSIVolume) Merge(other *CSIVolume) error {
 		}
 	}
 
-	// MountOptions can be updated so long as the volume isn't in use,
-	// but the caller will reject updating an in-use volume
-	v.MountOptions = other.MountOptions
+	// MountOptions can be updated so long as the volume isn't in use
+	if v.InUse() {
+		if !v.MountOptions.Equal(other.MountOptions) {
+			errs = multierror.Append(errs, errors.New(
+				"can not update mount options while volume is in use"))
+		}
+	} else {
+		v.MountOptions = other.MountOptions
+	}
 
 	// Secrets can be updated freely
 	v.Secrets = other.Secrets
 
 	// must be compatible with parameters set by from CreateVolumeResponse
 
-	if len(other.Parameters) != 0 && !helper.CompareMapStringString(v.Parameters, other.Parameters) {
+	if len(other.Parameters) != 0 && !maps.Equal(v.Parameters, other.Parameters) {
 		errs = multierror.Append(errs, errors.New(
 			"volume parameters cannot be updated"))
 	}
 
-	// Context is mutable and will be used during controller
-	// validation
-	v.Context = other.Context
+	// Context is mutable and will be used during controller validation, but we
+	// need to ensure we don't remove context that's been previously stored
+	// server-side if the user has submitted an update without adding it to the
+	// spec manually (which we should not require)
+	if len(other.Context) != 0 {
+		v.Context = other.Context
+	}
 	return errs.ErrorOrNil()
 }
 
 // Request and response wrappers
 type CSIVolumeRegisterRequest struct {
-	Volumes []*CSIVolume
+	Volumes   []*CSIVolume
+	Timestamp int64 // UnixNano
 	WriteRequest
 }
 
@@ -877,7 +878,8 @@ type CSIVolumeDeregisterResponse struct {
 }
 
 type CSIVolumeCreateRequest struct {
-	Volumes []*CSIVolume
+	Volumes   []*CSIVolume
+	Timestamp int64 // UnixNano
 	WriteRequest
 }
 
@@ -893,6 +895,19 @@ type CSIVolumeDeleteRequest struct {
 }
 
 type CSIVolumeDeleteResponse struct {
+	QueryMeta
+}
+
+type CSIVolumeExpandRequest struct {
+	VolumeID             string
+	RequestedCapacityMin int64
+	RequestedCapacityMax int64
+	Secrets              CSISecrets
+	WriteRequest
+}
+
+type CSIVolumeExpandResponse struct {
+	CapacityBytes int64
 	QueryMeta
 }
 
@@ -921,6 +936,7 @@ type CSIVolumeClaimRequest struct {
 	AccessMode     CSIVolumeAccessMode
 	AttachmentMode CSIVolumeAttachmentMode
 	State          CSIVolumeClaimState
+	Timestamp      int64 // UnixNano
 	WriteRequest
 }
 
@@ -971,7 +987,7 @@ type CSIVolumeListResponse struct {
 }
 
 // CSIVolumeExternalListRequest is a request to a controller plugin to list
-// all the volumes known to the the storage provider. This request is
+// all the volumes known to the storage provider. This request is
 // paginated by the plugin and accepts the QueryOptions.PerPage and
 // QueryOptions.NextToken fields
 type CSIVolumeExternalListRequest struct {
@@ -1059,7 +1075,7 @@ type CSISnapshotDeleteResponse struct {
 }
 
 // CSISnapshotListRequest is a request to a controller plugin to list all the
-// snapshot known to the the storage provider. This request is paginated by
+// snapshot known to the storage provider. This request is paginated by
 // the plugin and accepts the QueryOptions.PerPage and QueryOptions.NextToken
 // fields
 type CSISnapshotListRequest struct {
@@ -1101,14 +1117,21 @@ type CSIPlugin struct {
 
 	CreateIndex uint64
 	ModifyIndex uint64
+
+	// Create and modify times stored as UnixNano
+	CreateTime int64
+	ModifyTime int64
 }
 
 // NewCSIPlugin creates the plugin struct. No side-effects
 func NewCSIPlugin(id string, index uint64) *CSIPlugin {
+	now := time.Now().UnixNano()
 	out := &CSIPlugin{
 		ID:          id,
 		CreateIndex: index,
 		ModifyIndex: index,
+		CreateTime:  now,
+		ModifyTime:  now,
 	}
 
 	out.newStructs()

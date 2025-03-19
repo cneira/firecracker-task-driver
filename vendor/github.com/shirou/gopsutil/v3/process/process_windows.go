@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"syscall"
@@ -189,7 +190,7 @@ type winLUIDAndAttributes struct {
 }
 
 // TOKEN_PRIVILEGES
-type winTokenPriviledges struct {
+type winTokenPrivileges struct {
 	PrivilegeCount winDWord
 	Privileges     [1]winLUIDAndAttributes
 }
@@ -218,23 +219,23 @@ func init() {
 	}
 	defer token.Close()
 
-	tokenPriviledges := winTokenPriviledges{PrivilegeCount: 1}
+	tokenPrivileges := winTokenPrivileges{PrivilegeCount: 1}
 	lpName := syscall.StringToUTF16("SeDebugPrivilege")
 	ret, _, _ := procLookupPrivilegeValue.Call(
 		0,
 		uintptr(unsafe.Pointer(&lpName[0])),
-		uintptr(unsafe.Pointer(&tokenPriviledges.Privileges[0].Luid)))
+		uintptr(unsafe.Pointer(&tokenPrivileges.Privileges[0].Luid)))
 	if ret == 0 {
 		return
 	}
 
-	tokenPriviledges.Privileges[0].Attributes = 0x00000002 // SE_PRIVILEGE_ENABLED
+	tokenPrivileges.Privileges[0].Attributes = 0x00000002 // SE_PRIVILEGE_ENABLED
 
 	procAdjustTokenPrivileges.Call(
 		uintptr(token),
 		0,
-		uintptr(unsafe.Pointer(&tokenPriviledges)),
-		uintptr(unsafe.Sizeof(tokenPriviledges)),
+		uintptr(unsafe.Pointer(&tokenPrivileges)),
+		uintptr(unsafe.Sizeof(tokenPrivileges)),
 		0,
 		0)
 }
@@ -252,7 +253,7 @@ func pidsWithContext(ctx context.Context) ([]int32, error) {
 		if err := windows.EnumProcesses(ps, &read); err != nil {
 			return nil, err
 		}
-		if uint32(len(ps)) == read { // ps buffer was too small to host every results, retry with a bigger one
+		if uint32(len(ps)) == read/dwordSize { // ps buffer was too small to host every results, retry with a bigger one
 			psSize += 1024
 			continue
 		}
@@ -285,8 +286,7 @@ func PidExistsWithContext(ctx context.Context, pid int32) (bool, error) {
 		}
 		return false, err
 	}
-	const STILL_ACTIVE = 259 // https://docs.microsoft.com/en-us/windows/win32/api/processthreadsapi/nf-processthreadsapi-getexitcodeprocess
-	h, err := windows.OpenProcess(processQueryInformation, false, uint32(pid))
+	h, err := windows.OpenProcess(windows.SYNCHRONIZE, false, uint32(pid))
 	if err == windows.ERROR_ACCESS_DENIED {
 		return true, nil
 	}
@@ -296,10 +296,9 @@ func PidExistsWithContext(ctx context.Context, pid int32) (bool, error) {
 	if err != nil {
 		return false, err
 	}
-	defer syscall.CloseHandle(syscall.Handle(h))
-	var exitCode uint32
-	err = windows.GetExitCodeProcess(h, &exitCode)
-	return exitCode == STILL_ACTIVE, err
+	defer windows.CloseHandle(h)
+	event, err := windows.WaitForSingleObject(h, 0)
+	return event == uint32(windows.WAIT_TIMEOUT), err
 }
 
 func (p *Process) PpidWithContext(ctx context.Context) (int32, error) {
@@ -321,18 +320,19 @@ func (p *Process) PpidWithContext(ctx context.Context) (int32, error) {
 }
 
 func (p *Process) NameWithContext(ctx context.Context) (string, error) {
-	ppid, _, name, err := getFromSnapProcess(p.Pid)
+	if p.Pid == 0 {
+		return "System Idle Process", nil
+	}
+	if p.Pid == 4 {
+		return "System", nil
+	}
+
+	exe, err := p.ExeWithContext(ctx)
 	if err != nil {
 		return "", fmt.Errorf("could not get Name: %s", err)
 	}
 
-	// if no errors and not cached already, cache ppid
-	p.parent = ppid
-	if 0 == p.getPpid() {
-		p.setPpid(ppid)
-	}
-
-	return name, nil
+	return filepath.Base(exe), nil
 }
 
 func (p *Process) TgidWithContext(ctx context.Context) (int32, error) {
@@ -410,7 +410,7 @@ func (p *Process) CwdWithContext(_ context.Context) (string, error) {
 		}
 		if userProcParams.CurrentDirectoryPathNameLength > 0 {
 			cwd := readProcessMemory(syscall.Handle(h), procIs32Bits, uint64(userProcParams.CurrentDirectoryPathAddress), uint(userProcParams.CurrentDirectoryPathNameLength))
-			if len(cwd) != int(userProcParams.CurrentDirectoryPathAddress) {
+			if len(cwd) != int(userProcParams.CurrentDirectoryPathNameLength) {
 				return "", errors.New("cannot read current working directory")
 			}
 
@@ -433,15 +433,6 @@ func (p *Process) CwdWithContext(_ context.Context) (string, error) {
 
 	// if we reach here, we have no cwd
 	return "", nil
-}
-
-func (p *Process) ParentWithContext(ctx context.Context) (*Process, error) {
-	ppid, err := p.PpidWithContext(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("could not get ParentProcessID: %s", err)
-	}
-
-	return NewProcessWithContext(ctx, ppid)
 }
 
 func (p *Process) StatusWithContext(ctx context.Context) ([]string, error) {
@@ -703,8 +694,11 @@ func (p *Process) OpenFilesWithContext(ctx context.Context) ([]OpenFilesStat, er
 			0, true, windows.DUPLICATE_SAME_ACCESS) != nil {
 			continue
 		}
-		fileType, _ := windows.GetFileType(windows.Handle(file))
-		if fileType != windows.FILE_TYPE_DISK {
+		// release the new handle
+		defer windows.CloseHandle(windows.Handle(file))
+
+		fileType, err := windows.GetFileType(windows.Handle(file))
+		if err != nil || fileType != windows.FILE_TYPE_DISK {
 			continue
 		}
 
@@ -726,8 +720,8 @@ func (p *Process) OpenFilesWithContext(ctx context.Context) ([]OpenFilesStat, er
 		case <-time.NewTimer(100 * time.Millisecond).C:
 			continue
 		case <-ch:
-			fileInfo, _ := os.Stat(fileName)
-			if fileInfo.IsDir() {
+			fileInfo, err := os.Stat(fileName)
+			if err != nil || fileInfo.IsDir() {
 				continue
 			}
 
@@ -995,15 +989,9 @@ func is32BitProcess(h windows.Handle) bool {
 
 	var procIs32Bits bool
 	switch processorArchitecture {
-	case PROCESSOR_ARCHITECTURE_INTEL:
-		fallthrough
-	case PROCESSOR_ARCHITECTURE_ARM:
+	case PROCESSOR_ARCHITECTURE_INTEL, PROCESSOR_ARCHITECTURE_ARM:
 		procIs32Bits = true
-	case PROCESSOR_ARCHITECTURE_ARM64:
-		fallthrough
-	case PROCESSOR_ARCHITECTURE_IA64:
-		fallthrough
-	case PROCESSOR_ARCHITECTURE_AMD64:
+	case PROCESSOR_ARCHITECTURE_ARM64, PROCESSOR_ARCHITECTURE_IA64, PROCESSOR_ARCHITECTURE_AMD64:
 		var wow64 uint
 
 		ret, _, _ := common.ProcNtQueryInformationProcess.Call(

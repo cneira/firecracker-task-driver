@@ -1,3 +1,6 @@
+// Copyright (c) HashiCorp, Inc.
+// SPDX-License-Identifier: BUSL-1.1
+
 package structs
 
 import (
@@ -42,7 +45,7 @@ func (n *Node) ComputeClass() error {
 // included in the computed node class.
 func (n Node) HashInclude(field string, v interface{}) (bool, error) {
 	switch field {
-	case "Datacenter", "Attributes", "Meta", "NodeClass", "NodeResources":
+	case "Datacenter", "Attributes", "Meta", "NodeClass", "NodePool", "NodeResources":
 		return true, nil
 	default:
 		return false, nil
@@ -120,6 +123,8 @@ func EscapedConstraints(constraints []*Constraint) []*Constraint {
 // computed node class optimization.
 func constraintTargetEscapes(target string) bool {
 	switch {
+	case strings.HasPrefix(target, "${unique."):
+		return true
 	case strings.HasPrefix(target, "${node.unique."):
 		return true
 	case strings.HasPrefix(target, "${attr.unique."):

@@ -5,6 +5,11 @@ nomad task driver for creating [Firecracker](https://firecracker-microvm.github.
 
 - Website: https://www.nomadproject.io
 
+## Compatibility
+
+- Nomad 0.9+ - 1.3.5 (original release)
+- Nomad 1.9.7 (latest supported version)
+
 Requirements
 ------------
 

@@ -1,3 +1,6 @@
+// Copyright (c) HashiCorp, Inc.
+// SPDX-License-Identifier: BUSL-1.1
+
 package structs
 
 // Context defines the scope in which a search for Nomad object operates, and
@@ -11,11 +14,13 @@ const (
 	Evals           Context = "evals"
 	Jobs            Context = "jobs"
 	Nodes           Context = "nodes"
+	NodePools       Context = "node_pools"
 	Namespaces      Context = "namespaces"
 	Quotas          Context = "quotas"
 	Recommendations Context = "recommendations"
 	ScalingPolicies Context = "scaling_policy"
 	Plugins         Context = "plugins"
+	Variables       Context = "vars"
 	Volumes         Context = "volumes"
 
 	// Subtypes used in fuzzy matching.
@@ -56,6 +61,15 @@ type SearchConfig struct {
 	// Increasing this value can avoid resource consumption on Nomad server by
 	// reducing searches with less meaningful results.
 	MinTermLength int `hcl:"min_term_length"`
+}
+
+func (s *SearchConfig) Copy() *SearchConfig {
+	if s == nil {
+		return nil
+	}
+
+	ns := *s
+	return &ns
 }
 
 // SearchResponse is used to return matches and information about whether

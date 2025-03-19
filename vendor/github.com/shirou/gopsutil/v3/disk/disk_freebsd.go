@@ -4,14 +4,16 @@
 package disk
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"encoding/binary"
+	"fmt"
 	"strconv"
-
-	"golang.org/x/sys/unix"
+	"strings"
 
 	"github.com/shirou/gopsutil/v3/internal/common"
+	"golang.org/x/sys/unix"
 )
 
 // PartitionsWithContext returns disk partition.
@@ -133,6 +135,7 @@ func IOCountersWithContext(ctx context.Context, names ...string) (map[string]IOC
 			IoTime:     uint64(d.Busy_time.Compute() * 1000),
 			Name:       name,
 		}
+		ds.SerialNumber, _ = SerialNumberWithContext(ctx, name)
 		ret[name] = ds
 	}
 
@@ -163,7 +166,25 @@ func getFsType(stat unix.Statfs_t) string {
 }
 
 func SerialNumberWithContext(ctx context.Context, name string) (string, error) {
-	return "", common.ErrNotImplementedError
+	geomOut, err := invoke.CommandWithContext(ctx, "geom", "disk", "list", name)
+	if err != nil {
+		return "", fmt.Errorf("exec geom: %w", err)
+	}
+	s := bufio.NewScanner(bytes.NewReader(geomOut))
+	serial := ""
+	for s.Scan() {
+		flds := strings.Fields(s.Text())
+		if len(flds) == 2 && flds[0] == "ident:" {
+			if flds[1] != "(null)" {
+				serial = flds[1]
+			}
+			break
+		}
+	}
+	if err = s.Err(); err != nil {
+		return "", err
+	}
+	return serial, nil
 }
 
 func LabelWithContext(ctx context.Context, name string) (string, error) {

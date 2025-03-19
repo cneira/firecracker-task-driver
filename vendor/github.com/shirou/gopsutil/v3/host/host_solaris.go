@@ -4,10 +4,10 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"encoding/csv"
 	"fmt"
-	"io/ioutil"
+	"io"
 	"os"
-	"os/exec"
 	"regexp"
 	"strconv"
 	"strings"
@@ -23,23 +23,20 @@ func HostIDWithContext(ctx context.Context) (string, error) {
 
 	if platform == "SmartOS" {
 		// If everything works, use the current zone ID as the HostID if present.
-		zonename, err := exec.LookPath("zonename")
+		out, err := invoke.CommandWithContext(ctx, "zonename")
 		if err == nil {
-			out, err := invoke.CommandWithContext(ctx, zonename)
-			if err == nil {
-				sc := bufio.NewScanner(bytes.NewReader(out))
-				for sc.Scan() {
-					line := sc.Text()
+			sc := bufio.NewScanner(bytes.NewReader(out))
+			for sc.Scan() {
+				line := sc.Text()
 
-					// If we're in the global zone, rely on the hostname.
-					if line == "global" {
-						hostname, err := os.Hostname()
-						if err == nil {
-							return hostname, nil
-						}
-					} else {
-						return strings.TrimSpace(line), nil
+				// If we're in the global zone, rely on the hostname.
+				if line == "global" {
+					hostname, err := os.Hostname()
+					if err == nil {
+						return hostname, nil
 					}
+				} else {
+					return strings.TrimSpace(line), nil
 				}
 			}
 		}
@@ -48,15 +45,12 @@ func HostIDWithContext(ctx context.Context) (string, error) {
 	// If HostID is still unknown, use hostid(1), which can lie to callers but at
 	// this point there are no hardware facilities available.  This behavior
 	// matches that of other supported OSes.
-	hostID, err := exec.LookPath("hostid")
+	out, err := invoke.CommandWithContext(ctx, "hostid")
 	if err == nil {
-		out, err := invoke.CommandWithContext(ctx, hostID)
-		if err == nil {
-			sc := bufio.NewScanner(bytes.NewReader(out))
-			for sc.Scan() {
-				line := sc.Text()
-				return strings.TrimSpace(line), nil
-			}
+		sc := bufio.NewScanner(bytes.NewReader(out))
+		for sc.Scan() {
+			line := sc.Text()
+			return strings.TrimSpace(line), nil
 		}
 	}
 
@@ -65,7 +59,7 @@ func HostIDWithContext(ctx context.Context) (string, error) {
 
 // Count number of processes based on the number of entries in /proc
 func numProcs(ctx context.Context) (uint64, error) {
-	dirs, err := ioutil.ReadDir("/proc")
+	dirs, err := os.ReadDir("/proc")
 	if err != nil {
 		return 0, err
 	}
@@ -75,12 +69,7 @@ func numProcs(ctx context.Context) (uint64, error) {
 var kstatMatch = regexp.MustCompile(`([^\s]+)[\s]+([^\s]*)`)
 
 func BootTimeWithContext(ctx context.Context) (uint64, error) {
-	kstat, err := exec.LookPath("kstat")
-	if err != nil {
-		return 0, err
-	}
-
-	out, err := invoke.CommandWithContext(ctx, kstat, "-p", "unix:0:system_misc:boot_time")
+	out, err := invoke.CommandWithContext(ctx, "kstat", "-p", "unix:0:system_misc:boot_time")
 	if err != nil {
 		return 0, err
 	}
@@ -106,7 +95,40 @@ func UsersWithContext(ctx context.Context) ([]UserStat, error) {
 }
 
 func SensorsTemperaturesWithContext(ctx context.Context) ([]TemperatureStat, error) {
-	return []TemperatureStat{}, common.ErrNotImplementedError
+	var ret []TemperatureStat
+
+	out, err := invoke.CommandWithContext(ctx, "ipmitool", "-c", "sdr", "list")
+	if err != nil {
+		return ret, err
+	}
+
+	r := csv.NewReader(strings.NewReader(string(out)))
+	// Output may contain errors, e.g. "bmc_send_cmd: Permission denied", don't expect a consistent number of records
+	r.FieldsPerRecord = -1
+	for {
+		record, err := r.Read()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			return ret, err
+		}
+		// CPU1 Temp,40,degrees C,ok
+		if len(record) < 3 || record[1] == "" || record[2] != "degrees C" {
+			continue
+		}
+		v, err := strconv.ParseFloat(record[1], 64)
+		if err != nil {
+			return ret, err
+		}
+		ts := TemperatureStat{
+			SensorKey:   strings.TrimSuffix(record[0], " Temp"),
+			Temperature: v,
+		}
+		ret = append(ret, ts)
+	}
+
+	return ret, nil
 }
 
 func VirtualizationWithContext(ctx context.Context) (string, string, error) {
@@ -115,7 +137,7 @@ func VirtualizationWithContext(ctx context.Context) (string, string, error) {
 
 // Find distribution name from /etc/release
 func parseReleaseFile() (string, error) {
-	b, err := ioutil.ReadFile("/etc/release")
+	b, err := os.ReadFile("/etc/release")
 	if err != nil {
 		return "", err
 	}
@@ -146,12 +168,7 @@ func parseReleaseFile() (string, error) {
 
 // parseUnameOutput returns platformFamily, kernelVersion and platformVersion
 func parseUnameOutput(ctx context.Context) (string, string, string, error) {
-	uname, err := exec.LookPath("uname")
-	if err != nil {
-		return "", "", "", err
-	}
-
-	out, err := invoke.CommandWithContext(ctx, uname, "-srv")
+	out, err := invoke.CommandWithContext(ctx, "uname", "-srv")
 	if err != nil {
 		return "", "", "", err
 	}

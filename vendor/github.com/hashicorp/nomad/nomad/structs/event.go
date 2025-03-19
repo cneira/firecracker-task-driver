@@ -1,3 +1,6 @@
+// Copyright (c) HashiCorp, Inc.
+// SPDX-License-Identifier: BUSL-1.1
+
 package structs
 
 // EventStreamRequest is used to stream events from a servers EventBroker
@@ -16,21 +19,27 @@ type EventStreamWrapper struct {
 type Topic string
 
 const (
-	TopicDeployment Topic = "Deployment"
-	TopicEvaluation Topic = "Evaluation"
-	TopicAllocation Topic = "Allocation"
-	TopicJob        Topic = "Job"
-	TopicNode       Topic = "Node"
-	TopicACLPolicy  Topic = "ACLPolicy"
-	TopicACLToken   Topic = "ACLToken"
-	TopicService    Topic = "Service"
-	TopicAll        Topic = "*"
+	TopicDeployment     Topic = "Deployment"
+	TopicEvaluation     Topic = "Evaluation"
+	TopicAllocation     Topic = "Allocation"
+	TopicJob            Topic = "Job"
+	TopicNode           Topic = "Node"
+	TopicNodePool       Topic = "NodePool"
+	TopicACLPolicy      Topic = "ACLPolicy"
+	TopicACLToken       Topic = "ACLToken"
+	TopicACLRole        Topic = "ACLRole"
+	TopicACLAuthMethod  Topic = "ACLAuthMethod"
+	TopicACLBindingRule Topic = "ACLBindingRule"
+	TopicService        Topic = "Service"
+	TopicAll            Topic = "*"
 
 	TypeNodeRegistration              = "NodeRegistration"
 	TypeNodeDeregistration            = "NodeDeregistration"
 	TypeNodeEligibilityUpdate         = "NodeEligibility"
 	TypeNodeDrain                     = "NodeDrain"
 	TypeNodeEvent                     = "NodeStreamEvent"
+	TypeNodePoolUpserted              = "NodePoolUpserted"
+	TypeNodePoolDeleted               = "NodePoolDeleted"
 	TypeDeploymentUpdate              = "DeploymentStatusUpdate"
 	TypeDeploymentPromotion           = "DeploymentPromotion"
 	TypeDeploymentAllocHealth         = "DeploymentAllocHealth"
@@ -46,6 +55,12 @@ const (
 	TypeACLTokenUpserted              = "ACLTokenUpserted"
 	TypeACLPolicyDeleted              = "ACLPolicyDeleted"
 	TypeACLPolicyUpserted             = "ACLPolicyUpserted"
+	TypeACLRoleDeleted                = "ACLRoleDeleted"
+	TypeACLRoleUpserted               = "ACLRoleUpserted"
+	TypeACLAuthMethodUpserted         = "ACLAuthMethodUpserted"
+	TypeACLAuthMethodDeleted          = "ACLAuthMethodDeleted"
+	TypeACLBindingRuleUpserted        = "ACLBindingRuleUpserted"
+	TypeACLBindingRuleDeleted         = "ACLBindingRuleDeleted"
 	TypeServiceRegistration           = "ServiceRegistration"
 	TypeServiceDeregistration         = "ServiceDeregistration"
 )
@@ -121,6 +136,11 @@ type NodeStreamEvent struct {
 	Node *Node
 }
 
+// NodePoolEvent holds a newly updated NodePool.
+type NodePoolEvent struct {
+	NodePool *NodePool
+}
+
 type ACLTokenEvent struct {
 	ACLToken *ACLToken
 	secretID string
@@ -150,4 +170,22 @@ func (a *ACLTokenEvent) SecretID() string {
 
 type ACLPolicyEvent struct {
 	ACLPolicy *ACLPolicy
+}
+
+// ACLRoleStreamEvent holds a newly updated or deleted ACL role to be used as an
+// event within the event stream.
+type ACLRoleStreamEvent struct {
+	ACLRole *ACLRole
+}
+
+// ACLAuthMethodEvent holds a newly updated or deleted ACL auth method to be
+// used as an event in the event stream.
+type ACLAuthMethodEvent struct {
+	AuthMethod *ACLAuthMethod
+}
+
+// ACLBindingRuleEvent holds a newly updated or deleted ACL binding rule to be
+// used as an event in the event stream.
+type ACLBindingRuleEvent struct {
+	ACLBindingRule *ACLBindingRule
 }

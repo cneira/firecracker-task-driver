@@ -26,7 +26,7 @@ import (
 	"time"
 
 	hclog "github.com/hashicorp/go-hclog"
-	"github.com/hashicorp/nomad/client/stats"
+	"github.com/hashicorp/nomad/client/lib/cpustats"
 	"github.com/hashicorp/nomad/drivers/shared/eventer"
 	"github.com/hashicorp/nomad/plugins/base"
 	"github.com/hashicorp/nomad/plugins/drivers"
@@ -51,7 +51,7 @@ var (
 	pluginInfo = &base.PluginInfoResponse{
 		Type:              base.PluginTypeDriver,
 		PluginApiVersions: []string{drivers.ApiVersion010},
-		PluginVersion:     "0.1.1-dev",
+		PluginVersion:     "0.2.0",
 		Name:              pluginName,
 	}
 
@@ -266,9 +266,9 @@ func (d *Driver) RecoverTask(handle *drivers.TaskHandle) error {
 		MachineInstance: m.Machine,
 		Info:            m.Info,
 		logger:          d.logger,
-		cpuStatsSys:     stats.NewCpuStats(),
-		cpuStatsUser:    stats.NewCpuStats(),
-		cpuStatsTotal:   stats.NewCpuStats(),
+		cpuStatsSys:     cpustats.New(cpustats.Compute{NumCores: 1}),
+		cpuStatsUser:    cpustats.New(cpustats.Compute{NumCores: 1}),
+		cpuStatsTotal:   cpustats.New(cpustats.Compute{NumCores: 1}),
 	}
 
 	d.tasks.Set(taskState.TaskConfig.ID, h)
@@ -304,9 +304,9 @@ func (d *Driver) StartTask(cfg *drivers.TaskConfig) (*drivers.TaskHandle, *drive
 		MachineInstance: m.Machine,
 		Info:            m.Info,
 		logger:          d.logger,
-		cpuStatsSys:     stats.NewCpuStats(),
-		cpuStatsUser:    stats.NewCpuStats(),
-		cpuStatsTotal:   stats.NewCpuStats(),
+		cpuStatsSys:     cpustats.New(cpustats.Compute{NumCores: 1}),
+		cpuStatsUser:    cpustats.New(cpustats.Compute{NumCores: 1}),
+		cpuStatsTotal:   cpustats.New(cpustats.Compute{NumCores: 1}),
 	}
 
 	driverState := TaskState{

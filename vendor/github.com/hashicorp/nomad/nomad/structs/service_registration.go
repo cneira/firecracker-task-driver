@@ -1,9 +1,13 @@
+// Copyright (c) HashiCorp, Inc.
+// SPDX-License-Identifier: BUSL-1.1
+
 package structs
 
 import (
 	"crypto/md5"
 	"encoding/binary"
 	"fmt"
+	"slices"
 
 	"github.com/hashicorp/nomad/helper"
 	"github.com/hashicorp/nomad/helper/ipaddr"
@@ -100,14 +104,14 @@ func (s *ServiceRegistration) Copy() *ServiceRegistration {
 
 	ns := new(ServiceRegistration)
 	*ns = *s
-	ns.Tags = helper.CopySliceString(ns.Tags)
+	ns.Tags = slices.Clone(ns.Tags)
 
 	return ns
 }
 
-// Equals performs an equality check on the two service registrations. It
+// Equal performs an equality check on the two service registrations. It
 // handles nil objects.
-func (s *ServiceRegistration) Equals(o *ServiceRegistration) bool {
+func (s *ServiceRegistration) Equal(o *ServiceRegistration) bool {
 	if s == nil || o == nil {
 		return s == o
 	}
@@ -138,7 +142,7 @@ func (s *ServiceRegistration) Equals(o *ServiceRegistration) bool {
 	if s.Port != o.Port {
 		return false
 	}
-	if !helper.CompareSliceSetString(s.Tags, o.Tags) {
+	if !helper.SliceSetEq(s.Tags, o.Tags) {
 		return false
 	}
 	return true

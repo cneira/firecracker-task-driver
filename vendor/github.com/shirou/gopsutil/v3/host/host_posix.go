@@ -1,16 +1,15 @@
-//go:build linux || freebsd || openbsd || darwin || solaris
-// +build linux freebsd openbsd darwin solaris
+//go:build linux || freebsd || openbsd || netbsd || darwin || solaris
+// +build linux freebsd openbsd netbsd darwin solaris
 
 package host
 
-import (
-	"bytes"
-
-	"golang.org/x/sys/unix"
-)
+import "golang.org/x/sys/unix"
 
 func KernelArch() (string, error) {
 	var utsname unix.Utsname
 	err := unix.Uname(&utsname)
-	return string(utsname.Machine[:bytes.IndexByte(utsname.Machine[:], 0)]), err
+	if err != nil {
+		return "", err
+	}
+	return unix.ByteSliceToString(utsname.Machine[:]), nil
 }

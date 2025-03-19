@@ -1,14 +1,20 @@
+// Copyright (c) HashiCorp, Inc.
+// SPDX-License-Identifier: BUSL-1.1
+
 package acl
 
 import (
+	"errors"
 	"fmt"
 	"regexp"
+	"strings"
 
 	"github.com/hashicorp/hcl"
+	"github.com/hashicorp/hcl/hcl/ast"
 )
 
 const (
-	// The following levels are the only valid values for the `policy = "read"` stanza.
+	// The following levels are the only valid values for the `policy = "read"` block.
 	// When policies are merged together, the most privilege is granted, except for deny
 	// which always takes precedence and supersedes.
 	PolicyDeny  = "deny"
@@ -20,7 +26,7 @@ const (
 
 const (
 	// The following are the fine-grained capabilities that can be granted within a namespace.
-	// The Policy stanza is a short hand for granting several of these. When capabilities are
+	// The Policy field is a short hand for granting several of these. When capabilities are
 	// combined we take the union of all capabilities. If the deny capability is present, it
 	// takes precedence and overwrites all other capabilities.
 
@@ -53,8 +59,27 @@ var (
 )
 
 const (
+	// The following are the fine-grained capabilities that can be granted for
+	// node volume management.
+	//
+	// The Policy field is a short hand for granting several of these. When
+	// capabilities are combined we take the union of all capabilities. If the
+	// deny capability is present, it takes precedence and overwrites all other
+	// capabilities.
+
+	NodePoolCapabilityDelete = "delete"
+	NodePoolCapabilityDeny   = "deny"
+	NodePoolCapabilityRead   = "read"
+	NodePoolCapabilityWrite  = "write"
+)
+
+var (
+	validNodePool = regexp.MustCompile("^[a-zA-Z0-9-_*]{1,128}$")
+)
+
+const (
 	// The following are the fine-grained capabilities that can be granted for a volume set.
-	// The Policy stanza is a short hand for granting several of these. When capabilities are
+	// The Policy field is a short hand for granting several of these. When capabilities are
 	// combined we take the union of all capabilities. If the deny capability is present, it
 	// takes precedence and overwrites all other capabilities.
 
@@ -67,9 +92,21 @@ var (
 	validVolume = regexp.MustCompile("^[a-zA-Z0-9-*]{1,128}$")
 )
 
+const (
+	// The following are the fine-grained capabilities that can be
+	// granted for a variables path. When capabilities are
+	// combined we take the union of all capabilities.
+	VariablesCapabilityList    = "list"
+	VariablesCapabilityRead    = "read"
+	VariablesCapabilityWrite   = "write"
+	VariablesCapabilityDestroy = "destroy"
+	VariablesCapabilityDeny    = "deny"
+)
+
 // Policy represents a parsed HCL or JSON policy.
 type Policy struct {
 	Namespaces  []*NamespacePolicy  `hcl:"namespace,expand"`
+	NodePools   []*NodePoolPolicy   `hcl:"node_pool,expand"`
 	HostVolumes []*HostVolumePolicy `hcl:"host_volume,expand"`
 	Agent       *AgentPolicy        `hcl:"agent"`
 	Node        *NodePolicy         `hcl:"node"`
@@ -83,6 +120,7 @@ type Policy struct {
 // comprised of only a raw policy.
 func (p *Policy) IsEmpty() bool {
 	return len(p.Namespaces) == 0 &&
+		len(p.NodePools) == 0 &&
 		len(p.HostVolumes) == 0 &&
 		p.Agent == nil &&
 		p.Node == nil &&
@@ -95,6 +133,23 @@ func (p *Policy) IsEmpty() bool {
 type NamespacePolicy struct {
 	Name         string `hcl:",key"`
 	Policy       string
+	Capabilities []string
+	Variables    *VariablesPolicy `hcl:"variables"`
+}
+
+// NodePoolPolicy is the policfy for a specific node pool.
+type NodePoolPolicy struct {
+	Name         string `hcl:",key"`
+	Policy       string
+	Capabilities []string
+}
+
+type VariablesPolicy struct {
+	Paths []*VariablesPathPolicy `hcl:"path"`
+}
+
+type VariablesPathPolicy struct {
+	PathSpec     string `hcl:",key"`
 	Capabilities []string
 }
 
@@ -137,7 +192,7 @@ func isPolicyValid(policy string) bool {
 
 func (p *PluginPolicy) isValid() bool {
 	switch p.Policy {
-	case PolicyDeny, PolicyRead, PolicyList:
+	case PolicyDeny, PolicyRead, PolicyList, PolicyWrite:
 		return true
 	default:
 		return false
@@ -156,6 +211,18 @@ func isNamespaceCapabilityValid(cap string) bool {
 		return true
 	// Separate the enterprise-only capabilities
 	case NamespaceCapabilitySentinelOverride, NamespaceCapabilitySubmitRecommendation:
+		return true
+	default:
+		return false
+	}
+}
+
+// isPathCapabilityValid ensures the given capability is valid for a
+// variables path policy
+func isPathCapabilityValid(cap string) bool {
+	switch cap {
+	case VariablesCapabilityWrite, VariablesCapabilityRead,
+		VariablesCapabilityList, VariablesCapabilityDestroy, VariablesCapabilityDeny:
 		return true
 	default:
 		return false
@@ -211,6 +278,33 @@ func expandNamespacePolicy(policy string) []string {
 	}
 }
 
+func isNodePoolCapabilityValid(cap string) bool {
+	switch cap {
+	case NodePoolCapabilityDelete, NodePoolCapabilityRead, NodePoolCapabilityWrite,
+		NodePoolCapabilityDeny:
+		return true
+	default:
+		return false
+	}
+}
+
+func expandNodePoolPolicy(policy string) []string {
+	switch policy {
+	case PolicyDeny:
+		return []string{NodePoolCapabilityDeny}
+	case PolicyRead:
+		return []string{NodePoolCapabilityRead}
+	case PolicyWrite:
+		return []string{
+			NodePoolCapabilityDelete,
+			NodePoolCapabilityRead,
+			NodePoolCapabilityWrite,
+		}
+	default:
+		return nil
+	}
+}
+
 func isHostVolumeCapabilityValid(cap string) bool {
 	switch cap {
 	case HostVolumeCapabilityDeny, HostVolumeCapabilityMountReadOnly, HostVolumeCapabilityMountReadWrite:
@@ -231,6 +325,24 @@ func expandHostVolumePolicy(policy string) []string {
 	default:
 		return nil
 	}
+}
+
+func expandVariablesCapabilities(caps []string) []string {
+	var foundRead, foundList bool
+	for _, cap := range caps {
+		switch cap {
+		case VariablesCapabilityDeny:
+			return []string{VariablesCapabilityDeny}
+		case VariablesCapabilityRead:
+			foundRead = true
+		case VariablesCapabilityList:
+			foundList = true
+		}
+	}
+	if foundRead && !foundList {
+		caps = append(caps, PolicyList)
+	}
+	return caps
 }
 
 // Parse is used to parse the specified ACL rules into an
@@ -274,6 +386,51 @@ func Parse(rules string) (*Policy, error) {
 		if ns.Policy != "" {
 			extraCap := expandNamespacePolicy(ns.Policy)
 			ns.Capabilities = append(ns.Capabilities, extraCap...)
+		}
+
+		if ns.Variables != nil {
+			if len(ns.Variables.Paths) == 0 {
+				return nil, fmt.Errorf("Invalid variable policy: no variable paths in namespace %s", ns.Name)
+			}
+			for _, pathPolicy := range ns.Variables.Paths {
+				if pathPolicy.PathSpec == "" {
+					return nil, fmt.Errorf("Invalid missing variable path in namespace %s", ns.Name)
+				}
+				if strings.HasPrefix(pathPolicy.PathSpec, "/") {
+					return nil, fmt.Errorf(
+						"Invalid variable path %q in namespace %s: cannot start with a leading '/'`",
+						pathPolicy.PathSpec, ns.Name)
+				}
+				for _, cap := range pathPolicy.Capabilities {
+					if !isPathCapabilityValid(cap) {
+						return nil, fmt.Errorf(
+							"Invalid variable capability '%s' in namespace %s", cap, ns.Name)
+					}
+				}
+				pathPolicy.Capabilities = expandVariablesCapabilities(pathPolicy.Capabilities)
+
+			}
+
+		}
+
+	}
+
+	for _, np := range p.NodePools {
+		if !validNodePool.MatchString(np.Name) {
+			return nil, fmt.Errorf("Invalid node pool name '%s'", np.Name)
+		}
+		if np.Policy != "" && !isPolicyValid(np.Policy) {
+			return nil, fmt.Errorf("Invalid node pool policy '%s' for '%s'", np.Policy, np.Name)
+		}
+		for _, cap := range np.Capabilities {
+			if !isNodePoolCapabilityValid(cap) {
+				return nil, fmt.Errorf("Invalid node pool capability '%s' for '%s'", cap, np.Name)
+			}
+		}
+
+		if np.Policy != "" {
+			extraCap := expandNodePoolPolicy(np.Policy)
+			np.Capabilities = append(np.Capabilities, extraCap...)
 		}
 	}
 
@@ -328,5 +485,73 @@ func hclDecode(p *Policy, rules string) (err error) {
 		}
 	}()
 
-	return hcl.Decode(p, rules)
+	if err = hcl.Decode(p, rules); err != nil {
+		return err
+	}
+
+	// Manually parse the policy to fix blocks without labels.
+	//
+	// Due to a bug in the way HCL decodes files, a block without a label may
+	// return an incorrect key value and make it impossible to determine if the
+	// key was set by the user or incorrectly set by the decoder.
+	//
+	// By manually parsing the file we are able to determine if the label is
+	// missing in the file and set them to an empty string so the policy
+	// validation can return the appropriate errors.
+	root, err := hcl.Parse(rules)
+	if err != nil {
+		return fmt.Errorf("failed to parse policy: %w", err)
+	}
+
+	list, ok := root.Node.(*ast.ObjectList)
+	if !ok {
+		return errors.New("error parsing: root should be an object")
+	}
+
+	nsList := list.Filter("namespace")
+	for i, nsObj := range nsList.Items {
+		// Fix missing namespace key.
+		if len(nsObj.Keys) == 0 {
+			p.Namespaces[i].Name = ""
+		}
+
+		// Fix missing variable paths.
+		nsOT, ok := nsObj.Val.(*ast.ObjectType)
+		if !ok {
+			continue
+		}
+		varsList := nsOT.List.Filter("variables")
+		if varsList == nil || len(varsList.Items) == 0 {
+			continue
+		}
+
+		varsObj, ok := varsList.Items[0].Val.(*ast.ObjectType)
+		if !ok {
+			continue
+		}
+		paths := varsObj.List.Filter("path")
+		for j, path := range paths.Items {
+			if len(path.Keys) == 0 {
+				p.Namespaces[i].Variables.Paths[j].PathSpec = ""
+			}
+		}
+	}
+
+	npList := list.Filter("node_pool")
+	for i, npObj := range npList.Items {
+		// Fix missing node pool key.
+		if len(npObj.Keys) == 0 {
+			p.NodePools[i].Name = ""
+		}
+	}
+
+	hvList := list.Filter("host_volume")
+	for i, hvObj := range hvList.Items {
+		// Fix missing host volume key.
+		if len(hvObj.Keys) == 0 {
+			p.HostVolumes[i].Name = ""
+		}
+	}
+
+	return nil
 }

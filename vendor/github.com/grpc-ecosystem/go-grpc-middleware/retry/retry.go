@@ -5,8 +5,8 @@ package grpc_retry
 
 import (
 	"context"
-	"fmt"
 	"io"
+	"strconv"
 	"sync"
 	"time"
 
@@ -136,7 +136,6 @@ func StreamClientInterceptor(optFuncs ...CallOption) grpc.StreamClientIntercepto
 type serverStreamingRetryingStream struct {
 	grpc.ClientStream
 	bufferedSends []interface{} // single message that the client can sen
-	receivedGood  bool          // indicates whether any prior receives were successful
 	wasClosedSend bool          // indicates that CloseSend was closed
 	parentCtx     context.Context
 	callOpts      *options
@@ -191,9 +190,13 @@ func (s *serverStreamingRetryingStream) RecvMsg(m interface{}) error {
 		callCtx := perCallContext(s.parentCtx, s.callOpts, attempt)
 		newStream, err := s.reestablishStreamAndResendBuffer(callCtx)
 		if err != nil {
-			// TODO(mwitkow): Maybe dial and transport errors should be retriable?
+			// Retry dial and transport errors of establishing stream as grpc doesn't retry.
+			if isRetriable(err, s.callOpts) {
+				continue
+			}
 			return err
 		}
+
 		s.setStream(newStream)
 		attemptRetry, lastErr = s.receiveMsgAndIndicateRetry(m)
 		//fmt.Printf("Received message and indicate: %v  %v\n", attemptRetry, lastErr)
@@ -205,17 +208,8 @@ func (s *serverStreamingRetryingStream) RecvMsg(m interface{}) error {
 }
 
 func (s *serverStreamingRetryingStream) receiveMsgAndIndicateRetry(m interface{}) (bool, error) {
-	s.mu.RLock()
-	wasGood := s.receivedGood
-	s.mu.RUnlock()
 	err := s.getStream().RecvMsg(m)
 	if err == nil || err == io.EOF {
-		s.mu.Lock()
-		s.receivedGood = true
-		s.mu.Unlock()
-		return false, err
-	} else if wasGood {
-		// previous RecvMsg in the stream succeeded, no retry logic should interfere
 		return false, err
 	}
 	if isContextError(err) {
@@ -232,7 +226,9 @@ func (s *serverStreamingRetryingStream) receiveMsgAndIndicateRetry(m interface{}
 	return isRetriable(err, s.callOpts), err
 }
 
-func (s *serverStreamingRetryingStream) reestablishStreamAndResendBuffer(callCtx context.Context) (grpc.ClientStream, error) {
+func (s *serverStreamingRetryingStream) reestablishStreamAndResendBuffer(
+	callCtx context.Context,
+) (grpc.ClientStream, error) {
 	s.mu.RLock()
 	bufferedSends := s.bufferedSends
 	s.mu.RUnlock()
@@ -297,7 +293,7 @@ func perCallContext(parentCtx context.Context, callOpts *options, attempt uint) 
 		ctx, _ = context.WithTimeout(ctx, callOpts.perCallTimeout)
 	}
 	if attempt > 0 && callOpts.includeHeader {
-		mdClone := metautils.ExtractOutgoing(ctx).Clone().Set(AttemptMetadataKey, fmt.Sprintf("%d", attempt))
+		mdClone := metautils.ExtractOutgoing(ctx).Clone().Set(AttemptMetadataKey, strconv.FormatUint(uint64(attempt), 10))
 		ctx = mdClone.ToOutgoing(ctx)
 	}
 	return ctx
@@ -306,11 +302,11 @@ func perCallContext(parentCtx context.Context, callOpts *options, attempt uint) 
 func contextErrToGrpcErr(err error) error {
 	switch err {
 	case context.DeadlineExceeded:
-		return status.Errorf(codes.DeadlineExceeded, err.Error())
+		return status.Error(codes.DeadlineExceeded, err.Error())
 	case context.Canceled:
-		return status.Errorf(codes.Canceled, err.Error())
+		return status.Error(codes.Canceled, err.Error())
 	default:
-		return status.Errorf(codes.Unknown, err.Error())
+		return status.Error(codes.Unknown, err.Error())
 	}
 }
 
