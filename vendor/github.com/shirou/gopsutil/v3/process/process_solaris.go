@@ -3,7 +3,6 @@ package process
 import (
 	"bytes"
 	"context"
-	"io/ioutil"
 	"os"
 	"strconv"
 	"strings"
@@ -30,7 +29,7 @@ type MemoryMapsStat struct {
 type MemoryInfoExStat struct{}
 
 func pidsWithContext(ctx context.Context) ([]int32, error) {
-	return readPidsFromDir(common.HostProc())
+	return readPidsFromDir(common.HostProcWithContext(ctx))
 }
 
 func ProcessesWithContext(ctx context.Context) ([]*Process, error) {
@@ -86,10 +85,6 @@ func (p *Process) createTimeWithContext(ctx context.Context) (int64, error) {
 
 func (p *Process) CwdWithContext(ctx context.Context) (string, error) {
 	return p.fillFromPathCwdWithContext(ctx)
-}
-
-func (p *Process) ParentWithContext(ctx context.Context) (*Process, error) {
-	return nil, common.ErrNotImplementedError
 }
 
 func (p *Process) StatusWithContext(ctx context.Context) ([]string, error) {
@@ -203,7 +198,7 @@ func (p *Process) EnvironWithContext(ctx context.Context) ([]string, error) {
 
 func (p *Process) fillFromfdListWithContext(ctx context.Context) (string, []string, error) {
 	pid := p.Pid
-	statPath := common.HostProc(strconv.Itoa(int(pid)), "fd")
+	statPath := common.HostProcWithContext(ctx, strconv.Itoa(int(pid)), "fd")
 	d, err := os.Open(statPath)
 	if err != nil {
 		return statPath, []string{}, err
@@ -215,7 +210,7 @@ func (p *Process) fillFromfdListWithContext(ctx context.Context) (string, []stri
 
 func (p *Process) fillFromPathCwdWithContext(ctx context.Context) (string, error) {
 	pid := p.Pid
-	cwdPath := common.HostProc(strconv.Itoa(int(pid)), "path", "cwd")
+	cwdPath := common.HostProcWithContext(ctx, strconv.Itoa(int(pid)), "path", "cwd")
 	cwd, err := os.Readlink(cwdPath)
 	if err != nil {
 		return "", err
@@ -225,7 +220,7 @@ func (p *Process) fillFromPathCwdWithContext(ctx context.Context) (string, error
 
 func (p *Process) fillFromPathAOutWithContext(ctx context.Context) (string, error) {
 	pid := p.Pid
-	cwdPath := common.HostProc(strconv.Itoa(int(pid)), "path", "a.out")
+	cwdPath := common.HostProcWithContext(ctx, strconv.Itoa(int(pid)), "path", "a.out")
 	exe, err := os.Readlink(cwdPath)
 	if err != nil {
 		return "", err
@@ -235,8 +230,8 @@ func (p *Process) fillFromPathAOutWithContext(ctx context.Context) (string, erro
 
 func (p *Process) fillFromExecnameWithContext(ctx context.Context) (string, error) {
 	pid := p.Pid
-	execNamePath := common.HostProc(strconv.Itoa(int(pid)), "execname")
-	exe, err := ioutil.ReadFile(execNamePath)
+	execNamePath := common.HostProcWithContext(ctx, strconv.Itoa(int(pid)), "execname")
+	exe, err := os.ReadFile(execNamePath)
 	if err != nil {
 		return "", err
 	}
@@ -245,8 +240,8 @@ func (p *Process) fillFromExecnameWithContext(ctx context.Context) (string, erro
 
 func (p *Process) fillFromCmdlineWithContext(ctx context.Context) (string, error) {
 	pid := p.Pid
-	cmdPath := common.HostProc(strconv.Itoa(int(pid)), "cmdline")
-	cmdline, err := ioutil.ReadFile(cmdPath)
+	cmdPath := common.HostProcWithContext(ctx, strconv.Itoa(int(pid)), "cmdline")
+	cmdline, err := os.ReadFile(cmdPath)
 	if err != nil {
 		return "", err
 	}
@@ -262,8 +257,8 @@ func (p *Process) fillFromCmdlineWithContext(ctx context.Context) (string, error
 
 func (p *Process) fillSliceFromCmdlineWithContext(ctx context.Context) ([]string, error) {
 	pid := p.Pid
-	cmdPath := common.HostProc(strconv.Itoa(int(pid)), "cmdline")
-	cmdline, err := ioutil.ReadFile(cmdPath)
+	cmdPath := common.HostProcWithContext(ctx, strconv.Itoa(int(pid)), "cmdline")
+	cmdline, err := os.ReadFile(cmdPath)
 	if err != nil {
 		return nil, err
 	}

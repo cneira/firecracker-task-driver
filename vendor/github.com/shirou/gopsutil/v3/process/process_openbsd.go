@@ -9,7 +9,6 @@ import (
 	"encoding/binary"
 	"fmt"
 	"io"
-	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -61,8 +60,6 @@ func (p *Process) NameWithContext(ctx context.Context) (string, error) {
 			extendedName := filepath.Base(cmdlineSlice[0])
 			if strings.HasPrefix(extendedName, p.name) {
 				name = extendedName
-			} else {
-				name = cmdlineSlice[0]
 			}
 		}
 	}
@@ -71,7 +68,12 @@ func (p *Process) NameWithContext(ctx context.Context) (string, error) {
 }
 
 func (p *Process) CwdWithContext(ctx context.Context) (string, error) {
-	return "", common.ErrNotImplementedError
+	mib := []int32{CTLKern, KernProcCwd, p.Pid}
+	buf, _, err := common.CallSyscall(mib)
+	if err != nil {
+		return "", err
+	}
+	return common.ByteToString(buf), nil
 }
 
 func (p *Process) ExeWithContext(ctx context.Context) (string, error) {
@@ -142,10 +144,6 @@ func (p *Process) createTimeWithContext(ctx context.Context) (int64, error) {
 	return 0, common.ErrNotImplementedError
 }
 
-func (p *Process) ParentWithContext(ctx context.Context) (*Process, error) {
-	return nil, common.ErrNotImplementedError
-}
-
 func (p *Process) StatusWithContext(ctx context.Context) ([]string, error) {
 	k, err := p.getKProc()
 	if err != nil {
@@ -171,11 +169,7 @@ func (p *Process) StatusWithContext(ctx context.Context) ([]string, error) {
 func (p *Process) ForegroundWithContext(ctx context.Context) (bool, error) {
 	// see https://github.com/shirou/gopsutil/issues/596#issuecomment-432707831 for implementation details
 	pid := p.Pid
-	ps, err := exec.LookPath("ps")
-	if err != nil {
-		return false, err
-	}
-	out, err := invoke.CommandWithContext(ctx, ps, "-o", "stat=", "-p", strconv.Itoa(int(pid)))
+	out, err := invoke.CommandWithContext(ctx, "ps", "-o", "stat=", "-p", strconv.Itoa(int(pid)))
 	if err != nil {
 		return false, err
 	}

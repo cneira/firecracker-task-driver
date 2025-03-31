@@ -5,7 +5,6 @@ package net
 
 import (
 	"context"
-	"os/exec"
 	"strconv"
 	"strings"
 
@@ -17,11 +16,7 @@ func IOCounters(pernic bool) ([]IOCountersStat, error) {
 }
 
 func IOCountersWithContext(ctx context.Context, pernic bool) ([]IOCountersStat, error) {
-	netstat, err := exec.LookPath("netstat")
-	if err != nil {
-		return nil, err
-	}
-	out, err := invoke.CommandWithContext(ctx, netstat, "-ibdnW")
+	out, err := invoke.CommandWithContext(ctx, "netstat", "-ibdnW")
 	if err != nil {
 		return nil, err
 	}
@@ -95,7 +90,7 @@ func IOCountersWithContext(ctx context.Context, pernic bool) ([]IOCountersStat, 
 	return ret, nil
 }
 
-// NetIOCountersByFile is an method which is added just a compatibility for linux.
+// IOCountersByFile exists just for compatibility with Linux.
 func IOCountersByFile(pernic bool, filename string) ([]IOCountersStat, error) {
 	return IOCountersByFileWithContext(context.Background(), pernic, filename)
 }
@@ -120,7 +115,7 @@ func ConntrackStatsWithContext(ctx context.Context, percpu bool) ([]ConntrackSta
 	return nil, common.ErrNotImplementedError
 }
 
-// NetProtoCounters returns network statistics for the entire system
+// ProtoCounters returns network statistics for the entire system
 // If protocols is empty then all protocols are returned, otherwise
 // just the protocols in the list are returned.
 // Not Implemented for FreeBSD

@@ -1,3 +1,6 @@
+// Copyright (c) HashiCorp, Inc.
+// SPDX-License-Identifier: MPL-2.0
+
 syntax = "proto3";
 package hashicorp.nomad.plugins.drivers.proto;
 option go_package = "proto";
@@ -91,7 +94,7 @@ message TaskConfigSchemaRequest {}
 
 message TaskConfigSchemaResponse {
 
-    // Spec is the configuration schema for the job driver config stanza
+    // Spec is the configuration schema for the job driver config block
     hashicorp.nomad.plugins.shared.hclspec.Spec spec = 1;
 }
 
@@ -368,6 +371,7 @@ message DriverCapabilities {
         NONE = 0;
         CHROOT = 1;
         IMAGE = 2;
+        UNVEIL= 3;
     }
     // FsIsolation indicates what kind of filesystem isolation a driver supports.
     FSIsolation fs_isolation = 3;
@@ -388,7 +392,15 @@ message DriverCapabilities {
 
     // remote_tasks indicates whether the driver executes tasks remotely such
     // on cloud runtimes like AWS ECS.
-    bool remote_tasks = 7;
+    bool remote_tasks = 7 [deprecated=true];
+
+    // disable_log_collection indicates whether the driver has the capability of
+    // disabling log collection
+    bool disable_log_collection = 8;
+
+    // dynamic_workload_users indicates the task is capable of using UID/GID
+    // assigned from the Nomad client as user credentials for the task.
+    bool dynamic_workload_users = 9;
 }
 
 message NetworkIsolationSpec {
@@ -476,6 +488,21 @@ message TaskConfig {
 
     // DNSConfig is the configuration for task DNS resolvers and other options
     DNSConfig dns = 17;
+
+    // JobId is the ID of the job of which this task is part of
+    string job_id = 18;
+
+    // Namespace is the namespace of the job of which this task is part of
+    string namespace = 19;
+
+    // NodeName is the name of the node where the associated allocation is running
+    string node_name = 20;
+
+    // NodeId is the ID of the node where the associated allocation is running
+    string node_id = 21;
+
+    // ParentJobID is the parent id for dispatch and periodic jobs
+    string parent_job_id = 22;
 }
 
 message Resources {
@@ -564,6 +591,12 @@ message Mount {
 
     // Readonly if set true, mounts the path in readonly mode
     bool readonly = 3;
+
+    // Propagation mode for the mount. Not exactly the same as the unix mount
+    // propagation flags. See callsite usage for details.
+    string propagation_mode = 4;
+
+    string selinux_label = 5;
 }
 
 message Device {

@@ -1,12 +1,11 @@
-//go:build freebsd || openbsd
-// +build freebsd openbsd
+//go:build freebsd || openbsd || netbsd
+// +build freebsd openbsd netbsd
 
 package mem
 
 import (
 	"context"
 	"fmt"
-	"os/exec"
 	"strconv"
 	"strings"
 )
@@ -25,11 +24,7 @@ func SwapDevices() ([]*SwapDevice, error) {
 }
 
 func SwapDevicesWithContext(ctx context.Context) ([]*SwapDevice, error) {
-	swapCommandPath, err := exec.LookPath(swapCommand)
-	if err != nil {
-		return nil, fmt.Errorf("could not find command %q: %w", swapCommand, err)
-	}
-	output, err := invoke.CommandWithContext(ctx, swapCommandPath, "-lk")
+	output, err := invoke.CommandWithContext(ctx, swapCommand, "-lk")
 	if err != nil {
 		return nil, fmt.Errorf("could not execute %q: %w", swapCommand, err)
 	}

@@ -5,10 +5,15 @@ package disk
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"fmt"
 	"math"
 	"os"
+	"path/filepath"
+	"regexp"
+	"runtime"
+	"strconv"
 	"strings"
 
 	"github.com/shirou/gopsutil/v3/internal/common"
@@ -72,20 +77,130 @@ func PartitionsWithContext(ctx context.Context, all bool) ([]PartitionStat, erro
 		})
 	}
 	if err := scanner.Err(); err != nil {
-		return nil, fmt.Errorf("unable to scan %q: %v", _MNTTAB, err)
+		return nil, fmt.Errorf("unable to scan %q: %w", _MNTTAB, err)
 	}
 
 	return ret, err
 }
 
+var kstatSplit = regexp.MustCompile(`[:\s]+`)
+
 func IOCountersWithContext(ctx context.Context, names ...string) (map[string]IOCountersStat, error) {
-	return nil, common.ErrNotImplementedError
+	var issolaris bool
+	if runtime.GOOS == "illumos" {
+		issolaris = false
+	} else {
+		issolaris = true
+	}
+	// check disks instead of zfs pools
+	filterstr := "/[^zfs]/:::/^nread$|^nwritten$|^reads$|^writes$|^rtime$|^wtime$/"
+	kstatSysOut, err := invoke.CommandWithContext(ctx, "kstat", "-c", "disk", "-p", filterstr)
+	if err != nil {
+		return nil, fmt.Errorf("cannot execute kstat: %w", err)
+	}
+	lines := strings.Split(strings.TrimSpace(string(kstatSysOut)), "\n")
+	if len(lines) == 0 {
+		return nil, fmt.Errorf("no disk class found")
+	}
+	dnamearr := make(map[string]string)
+	nreadarr := make(map[string]uint64)
+	nwrittenarr := make(map[string]uint64)
+	readsarr := make(map[string]uint64)
+	writesarr := make(map[string]uint64)
+	rtimearr := make(map[string]uint64)
+	wtimearr := make(map[string]uint64)
+
+	// in case the name is "/dev/sda1", then convert to "sda1"
+	for i, name := range names {
+		names[i] = filepath.Base(name)
+	}
+
+	for _, line := range lines {
+		fields := kstatSplit.Split(line, -1)
+		if len(fields) == 0 {
+			continue
+		}
+		moduleName := fields[0]
+		instance := fields[1]
+		dname := fields[2]
+
+		if len(names) > 0 && !common.StringsHas(names, dname) {
+			continue
+		}
+		dnamearr[moduleName+instance] = dname
+		// fields[3] is the statistic label, fields[4] is the value
+		switch fields[3] {
+		case "nread":
+			nreadarr[moduleName+instance], err = strconv.ParseUint((fields[4]), 10, 64)
+			if err != nil {
+				return nil, err
+			}
+		case "nwritten":
+			nwrittenarr[moduleName+instance], err = strconv.ParseUint((fields[4]), 10, 64)
+			if err != nil {
+				return nil, err
+			}
+		case "reads":
+			readsarr[moduleName+instance], err = strconv.ParseUint((fields[4]), 10, 64)
+			if err != nil {
+				return nil, err
+			}
+		case "writes":
+			writesarr[moduleName+instance], err = strconv.ParseUint((fields[4]), 10, 64)
+			if err != nil {
+				return nil, err
+			}
+		case "rtime":
+			if issolaris {
+				// from sec to milli secs
+				var frtime float64
+				frtime, err = strconv.ParseFloat((fields[4]), 64)
+				rtimearr[moduleName+instance] = uint64(frtime * 1000)
+			} else {
+				// from nano to milli secs
+				rtimearr[moduleName+instance], err = strconv.ParseUint((fields[4]), 10, 64)
+				rtimearr[moduleName+instance] = rtimearr[moduleName+instance] / 1000 / 1000
+			}
+			if err != nil {
+				return nil, err
+			}
+		case "wtime":
+			if issolaris {
+				// from sec to milli secs
+				var fwtime float64
+				fwtime, err = strconv.ParseFloat((fields[4]), 64)
+				wtimearr[moduleName+instance] = uint64(fwtime * 1000)
+			} else {
+				// from nano to milli secs
+				wtimearr[moduleName+instance], err = strconv.ParseUint((fields[4]), 10, 64)
+				wtimearr[moduleName+instance] = wtimearr[moduleName+instance] / 1000 / 1000
+			}
+			if err != nil {
+				return nil, err
+			}
+		}
+	}
+
+	ret := make(map[string]IOCountersStat, 0)
+	for k := range dnamearr {
+		d := IOCountersStat{
+			Name:       dnamearr[k],
+			ReadBytes:  nreadarr[k],
+			WriteBytes: nwrittenarr[k],
+			ReadCount:  readsarr[k],
+			WriteCount: writesarr[k],
+			ReadTime:   rtimearr[k],
+			WriteTime:  wtimearr[k],
+		}
+		ret[d.Name] = d
+	}
+	return ret, nil
 }
 
 func UsageWithContext(ctx context.Context, path string) (*UsageStat, error) {
 	statvfs := unix.Statvfs_t{}
 	if err := unix.Statvfs(path, &statvfs); err != nil {
-		return nil, fmt.Errorf("unable to call statvfs(2) on %q: %v", path, err)
+		return nil, fmt.Errorf("unable to call statvfs(2) on %q: %w", path, err)
 	}
 
 	usageStat := &UsageStat{
@@ -114,7 +229,31 @@ func UsageWithContext(ctx context.Context, path string) (*UsageStat, error) {
 }
 
 func SerialNumberWithContext(ctx context.Context, name string) (string, error) {
-	return "", common.ErrNotImplementedError
+	out, err := invoke.CommandWithContext(ctx, "cfgadm", "-ls", "select=type(disk),cols=ap_id:info,cols2=,noheadings")
+	if err != nil {
+		return "", fmt.Errorf("exec cfgadm: %w", err)
+	}
+
+	suf := "::" + strings.TrimPrefix(name, "/dev/")
+	s := bufio.NewScanner(bytes.NewReader(out))
+	for s.Scan() {
+		flds := strings.Fields(s.Text())
+		if strings.HasSuffix(flds[0], suf) {
+			flen := len(flds)
+			if flen >= 3 {
+				for i, f := range flds {
+					if i > 0 && i < flen-1 && f == "SN:" {
+						return flds[i+1], nil
+					}
+				}
+			}
+			return "", nil
+		}
+	}
+	if err := s.Err(); err != nil {
+		return "", err
+	}
+	return "", nil
 }
 
 func LabelWithContext(ctx context.Context, name string) (string, error) {

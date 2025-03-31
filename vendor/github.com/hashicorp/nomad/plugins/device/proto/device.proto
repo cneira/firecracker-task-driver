@@ -1,3 +1,6 @@
+// Copyright (c) HashiCorp, Inc.
+// SPDX-License-Identifier: MPL-2.0
+
 syntax = "proto3";
 package hashicorp.nomad.plugins.device;
 option go_package = "proto";
@@ -89,7 +92,7 @@ message ReserveRequest {
 }
 
 // ReserveResponse informs Nomad how to expose the requested devices
-// to the the task.
+// to the task.
 message ReserveResponse {
   // container_res contains information on how to mount the device
   // into a task isolated using container technologies (where the 

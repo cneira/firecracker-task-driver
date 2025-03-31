@@ -2,7 +2,13 @@ package testing
 
 import (
 	"fmt"
+	"io/ioutil"
 	"log"
+	"os"
+	"runtime"
+	"strings"
+	"sync"
+	"sync/atomic"
 )
 
 // T is the interface that mimics the standard library *testing.T.
@@ -23,10 +29,44 @@ type T interface {
 	Logf(format string, args ...interface{})
 	Name() string
 	Parallel()
+	Setenv(key string, value string)
 	Skip(args ...interface{})
 	SkipNow()
 	Skipf(format string, args ...interface{})
 	Skipped() bool
+	TempDir() string
+}
+
+// TB is the interface common to T and B, copied from the standard library
+// *testing.TB.
+//
+// This interface should be used as the type of the testing argument to any
+// test helper function that exists in the main codebase, which may be invoked
+// by tests of type *testing.T and *testing.B.
+type TB interface {
+	Cleanup(func())
+	Error(args ...interface{})
+	Errorf(format string, args ...interface{})
+	Fail()
+	FailNow()
+	Failed() bool
+	Fatal(args ...interface{})
+	Fatalf(format string, args ...interface{})
+	Helper()
+	Log(args ...interface{})
+	Logf(format string, args ...interface{})
+	Name() string
+	Setenv(key string, value string)
+	Skip(args ...interface{})
+	SkipNow()
+	Skipf(format string, args ...interface{})
+	Skipped() bool
+	TempDir() string
+}
+
+var tempDirReplacer struct {
+	sync.Once
+	r *strings.Replacer
 }
 
 // RuntimeT implements T and can be instantiated and run at runtime to
@@ -34,14 +74,25 @@ type T interface {
 // for calls to Fatal. For calls to Error, you'll have to check the errors
 // list to determine whether to exit yourself.
 //
-// Cleanup does NOT work, so if you're using a helper that uses Cleanup,
-// there may be dangling resources.
-//
 // Parallel does not do anything.
 type RuntimeT struct {
-	skipped bool
-	failed  bool
+	mu          sync.RWMutex // guards this group of fields
+	skipped     bool
+	failed      bool
+	isEnvSet    bool
+	isParallel  bool
+	tempDirOnce sync.Once
+	tempDir     string
+	tempDirErr  error
+	tempDirSeq  int32
+	cleanups    []func()  // optional functions to be called at the end of the test
+	cleanupName string    // Name of the cleanup function.
+	cleanupPc   []uintptr // The stack trace at the point where Cleanup was called.
 }
+
+// The maximum number of stack frames to go through when skipping helper functions for
+// the purpose of decorating log messages.
+const maxStackLen = 50
 
 func (t *RuntimeT) Error(args ...interface{}) {
 	log.Println(fmt.Sprintln(args...))
@@ -87,7 +138,37 @@ func (t *RuntimeT) Name() string {
 	return ""
 }
 
-func (t *RuntimeT) Parallel() {}
+func (t *RuntimeT) Parallel() {
+	if t.isEnvSet {
+		panic("t.Parallel called after t.Setenv; cannot set environment variables in parallel tests")
+	}
+
+	t.isParallel = true
+}
+
+func (t *RuntimeT) Setenv(key string, value string) {
+	if t.isParallel {
+		panic("t.Setenv called after t.Parallel; cannot set environment variables in parallel tests")
+	}
+
+	t.isEnvSet = true
+
+	prevValue, ok := os.LookupEnv(key)
+
+	if err := os.Setenv(key, value); err != nil {
+		t.Fatalf("cannot set environment variable: %v", err)
+	}
+
+	if ok {
+		t.Cleanup(func() {
+			os.Setenv(key, prevValue)
+		})
+	} else {
+		t.Cleanup(func() {
+			os.Unsetenv(key)
+		})
+	}
+}
 
 func (t *RuntimeT) Skip(args ...interface{}) {
 	log.Print(args...)
@@ -107,6 +188,93 @@ func (t *RuntimeT) Skipped() bool {
 	return t.skipped
 }
 
+// TempDir returns a temporary directory for the test to use.
+// The directory is automatically removed by Cleanup when the test and
+// all its subtests complete.
+// Each subsequent call to t.TempDir returns a unique directory;
+// if the directory creation fails, TempDir terminates the test by calling Fatal.
+//
+// This logic is copied from the standard go library
+func (t *RuntimeT) TempDir() string {
+	// Use a single parent directory for all the temporary directories
+	// created by a test, each numbered sequentially.
+	t.tempDirOnce.Do(func() {
+		t.Helper()
+
+		// ioutil.TempDir doesn't like path separators in its pattern,
+		// so mangle the name to accommodate subtests.
+		tempDirReplacer.Do(func() {
+			tempDirReplacer.r = strings.NewReplacer("/", "_", "\\", "_", ":", "_")
+		})
+		pattern := tempDirReplacer.r.Replace(t.Name())
+
+		t.tempDir, t.tempDirErr = ioutil.TempDir("", pattern)
+		if t.tempDirErr == nil {
+			t.Cleanup(func() {
+				if err := os.RemoveAll(t.tempDir); err != nil {
+					t.Errorf("TempDir RemoveAll cleanup: %v", err)
+				}
+			})
+		}
+	})
+	if t.tempDirErr != nil {
+		t.Fatalf("TempDir: %v", t.tempDirErr)
+	}
+	seq := atomic.AddInt32(&t.tempDirSeq, 1)
+	dir := fmt.Sprintf("%s%c%03d", t.tempDir, os.PathSeparator, seq)
+	if err := os.Mkdir(dir, 0777); err != nil {
+		t.Fatalf("TempDir: %v", err)
+	}
+	return dir
+}
+
 func (t *RuntimeT) Helper() {}
 
-func (t *RuntimeT) Cleanup(func()) {}
+// Cleanup registers a function to be called when the test and all its
+// subtests complete. Cleanup functions will be called in last added,
+// first called order.
+//
+// This logic is copied from the standard go library
+func (t *RuntimeT) Cleanup(f func()) {
+	var pc [maxStackLen]uintptr
+	// Skip two extra frames to account for this function and runtime.Callers itself.
+	n := runtime.Callers(2, pc[:])
+	cleanupPc := pc[:n]
+
+	fn := func() {
+		defer func() {
+			t.mu.Lock()
+			defer t.mu.Unlock()
+			t.cleanupName = ""
+			t.cleanupPc = nil
+		}()
+
+		name := callerName(0)
+		t.mu.Lock()
+		t.cleanupName = name
+		t.cleanupPc = cleanupPc
+		t.mu.Unlock()
+
+		f()
+	}
+
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.cleanups = append(t.cleanups, fn)
+}
+
+// callerName gives the function name (qualified with a package path)
+// for the caller after skip frames (where 0 means the current function).
+//
+// This logic is copied from the standard go library
+func callerName(skip int) string {
+	// Make room for the skip PC.
+	var pc [1]uintptr
+	n := runtime.Callers(skip+2, pc[:]) // skip + runtime.Callers + callerName
+	if n == 0 {
+		panic("testing: zero callers found")
+	}
+	frames := runtime.CallersFrames(pc[:n])
+	frame, _ := frames.Next()
+	return frame.Function
+}

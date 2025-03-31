@@ -1,9 +1,13 @@
+// Copyright (c) HashiCorp, Inc.
+// SPDX-License-Identifier: MPL-2.0
+
 package parseutil
 
 import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"regexp"
 	"strconv"
 	"strings"
@@ -14,7 +18,10 @@ import (
 	"github.com/mitchellh/mapstructure"
 )
 
-var validCapacityString = regexp.MustCompile("^[\t ]*([0-9]+)[\t ]?([kmgtKMGT][iI]?[bB])?[\t ]*$")
+var (
+	validCapacityString               = regexp.MustCompile("^[\t ]*([0-9]+)[\t ]?([kmgtKMGT][iI]?[bB])?[\t ]*$")
+	ErrDurationMultiplicationOverflow = errors.New("multiplication of durations resulted in overflow, one operand may be too large")
+)
 
 // ParseCapacityString parses a capacity string and returns the number of bytes it represents.
 // Capacity strings are things like 5gib or 10MB. Supported prefixes are kb, kib, mb, mib, gb,
@@ -92,12 +99,16 @@ func ParseCapacityString(in interface{}) (uint64, error) {
 	return cap, nil
 }
 
+// Parse a duration from an arbitrary value (a string or numeric value) into
+// a time.Duration; when units are missing (such as when a numeric type is
+// provided), the duration is assumed to be in seconds.
 func ParseDurationSecond(in interface{}) (time.Duration, error) {
 	var dur time.Duration
 	jsonIn, ok := in.(json.Number)
 	if ok {
 		in = jsonIn.String()
 	}
+	var err error
 	switch inp := in.(type) {
 	case nil:
 		// return default of zero
@@ -107,7 +118,7 @@ func ParseDurationSecond(in interface{}) (time.Duration, error) {
 		}
 
 		if v, err := strconv.ParseInt(inp, 10, 64); err == nil {
-			return time.Duration(v) * time.Second, nil
+			return overflowMul(time.Duration(v), time.Second)
 		}
 
 		if strings.HasSuffix(inp, "d") {
@@ -115,7 +126,7 @@ func ParseDurationSecond(in interface{}) (time.Duration, error) {
 			if err != nil {
 				return dur, err
 			}
-			return time.Duration(v) * 24 * time.Hour, nil
+			return overflowMul(time.Duration(v), 24*time.Hour)
 		}
 
 		var err error
@@ -123,30 +134,44 @@ func ParseDurationSecond(in interface{}) (time.Duration, error) {
 			return dur, err
 		}
 	case int:
-		dur = time.Duration(inp) * time.Second
+		dur, err = overflowMul(time.Duration(inp), time.Second)
 	case int32:
-		dur = time.Duration(inp) * time.Second
+		dur, err = overflowMul(time.Duration(inp), time.Second)
 	case int64:
-		dur = time.Duration(inp) * time.Second
+		dur, err = overflowMul(time.Duration(inp), time.Second)
 	case uint:
-		dur = time.Duration(inp) * time.Second
+		dur, err = overflowMul(time.Duration(inp), time.Second)
 	case uint32:
-		dur = time.Duration(inp) * time.Second
+		dur, err = overflowMul(time.Duration(inp), time.Second)
 	case uint64:
-		dur = time.Duration(inp) * time.Second
+		dur, err = overflowMul(time.Duration(inp), time.Second)
 	case float32:
-		dur = time.Duration(inp) * time.Second
+		dur, err = overflowMul(time.Duration(inp), time.Second)
 	case float64:
-		dur = time.Duration(inp) * time.Second
+		dur, err = overflowMul(time.Duration(inp), time.Second)
 	case time.Duration:
 		dur = inp
 	default:
 		return 0, errors.New("could not parse duration from input")
 	}
-
-	return dur, nil
+	if err != nil {
+		dur = time.Duration(0)
+	}
+	return dur, err
 }
 
+// Multiplication of durations could overflow, this performs multiplication while erroring out if an overflow occurs
+func overflowMul(a time.Duration, b time.Duration) (time.Duration, error) {
+	x := a * b
+	if a != 0 && x/a != b {
+		return time.Duration(0), ErrDurationMultiplicationOverflow
+	}
+	return x, nil
+}
+
+// Parse an absolute timestamp from the provided arbitrary value (string or
+// numeric value). When an untyped numeric value is provided, it is assumed
+// to be seconds from the Unix Epoch.
 func ParseAbsoluteTime(in interface{}) (time.Time, error) {
 	var t time.Time
 	switch inp := in.(type) {
@@ -195,6 +220,13 @@ func ParseAbsoluteTime(in interface{}) (time.Time, error) {
 	return t, nil
 }
 
+// ParseInt takes an arbitrary value (either a string or numeric type) and
+// parses it as an int64 value. This value is assumed to be larger than the
+// provided type, but cannot safely be cast.
+//
+// When the end value is bounded (such as an int value), it is recommended
+// to instead call SafeParseInt or SafeParseIntRange to safely cast to a
+// more restrictive type.
 func ParseInt(in interface{}) (int64, error) {
 	var ret int64
 	jsonIn, ok := in.(json.Number)
@@ -232,6 +264,11 @@ func ParseInt(in interface{}) (int64, error) {
 	return ret, nil
 }
 
+// ParseDirectIntSlice behaves similarly to ParseInt, but accepts typed
+// slices, returning a slice of int64s.
+//
+// If the starting value may not be in slice form (e.g.. a bare numeric value
+// could be provided), it is suggested to call ParseIntSlice instead.
 func ParseDirectIntSlice(in interface{}) ([]int64, error) {
 	var ret []int64
 
@@ -290,6 +327,10 @@ func ParseDirectIntSlice(in interface{}) ([]int64, error) {
 // nicely handle the common cases of providing only an int-ish, providing
 // an actual slice of int-ishes, or providing a comma-separated list of
 // numbers.
+//
+// When []int64 is not the desired final type (or the values should be
+// range-bound), it is suggested to call SafeParseIntSlice or
+// SafeParseIntSliceRange instead.
 func ParseIntSlice(in interface{}) ([]int64, error) {
 	if ret, err := ParseInt(in); err == nil {
 		return []int64{ret}, nil
@@ -320,6 +361,7 @@ func ParseIntSlice(in interface{}) ([]int64, error) {
 	return nil, errors.New("could not parse value from input")
 }
 
+// Parses the provided arbitrary value as a boolean-like value.
 func ParseBool(in interface{}) (bool, error) {
 	var result bool
 	if err := mapstructure.WeakDecode(in, &result); err != nil {
@@ -328,6 +370,7 @@ func ParseBool(in interface{}) (bool, error) {
 	return result, nil
 }
 
+// Parses the provided arbitrary value as a string.
 func ParseString(in interface{}) (string, error) {
 	var result string
 	if err := mapstructure.WeakDecode(in, &result); err != nil {
@@ -336,6 +379,7 @@ func ParseString(in interface{}) (string, error) {
 	return result, nil
 }
 
+// Parses the provided string-like value as a comma-separated list of values.
 func ParseCommaStringSlice(in interface{}) ([]string, error) {
 	jsonIn, ok := in.(json.Number)
 	if ok {
@@ -362,6 +406,7 @@ func ParseCommaStringSlice(in interface{}) ([]string, error) {
 	return strutil.TrimStrings(result), nil
 }
 
+// Parses the specified value as one or more addresses, separated by commas.
 func ParseAddrs(addrs interface{}) ([]*sockaddr.SockAddrMarshaler, error) {
 	out := make([]*sockaddr.SockAddrMarshaler, 0)
 	stringAddrs := make([]string, 0)
@@ -400,4 +445,76 @@ func ParseAddrs(addrs interface{}) ([]*sockaddr.SockAddrMarshaler, error) {
 	}
 
 	return out, nil
+}
+
+// Parses the provided arbitrary value (see ParseInt), ensuring it is within
+// the specified range (inclusive of bounds). If this range corresponds to a
+// smaller type, the returned value can then be safely cast without risking
+// overflow.
+func SafeParseIntRange(in interface{}, min int64, max int64) (int64, error) {
+	raw, err := ParseInt(in)
+	if err != nil {
+		return 0, err
+	}
+
+	if raw < min || raw > max {
+		return 0, fmt.Errorf("error parsing int value; out of range [%v to %v]: %v", min, max, raw)
+	}
+
+	return raw, nil
+}
+
+// Parses the specified arbitrary value (see ParseInt), ensuring that the
+// resulting value is within the range for an int value. If no error occurred,
+// the caller knows no overflow occurred.
+func SafeParseInt(in interface{}) (int, error) {
+	raw, err := SafeParseIntRange(in, math.MinInt, math.MaxInt)
+	return int(raw), err
+}
+
+// Parses the provided arbitrary value (see ParseIntSlice) into a slice of
+// int64 values, ensuring each is within the specified range (inclusive of
+// bounds). If this range corresponds to a smaller type, the returned value
+// can then be safely cast without risking overflow.
+//
+// If elements is positive, it is used to ensure the resulting slice is
+// bounded above by that many number of elements (inclusive).
+func SafeParseIntSliceRange(in interface{}, minValue int64, maxValue int64, elements int) ([]int64, error) {
+	raw, err := ParseIntSlice(in)
+	if err != nil {
+		return nil, err
+	}
+
+	if elements > 0 && len(raw) > elements {
+		return nil, fmt.Errorf("error parsing value from input: got %v but expected at most %v elements", len(raw), elements)
+	}
+
+	for index, value := range raw {
+		if value < minValue || value > maxValue {
+			return nil, fmt.Errorf("error parsing value from input: element %v was outside of range [%v to %v]: %v", index, minValue, maxValue, value)
+		}
+	}
+
+	return raw, nil
+}
+
+// Parses the provided arbitrary value (see ParseIntSlice) into a slice of
+// int values, ensuring the each resulting value in the slice is within the
+// range for an int value. If no error occurred, the caller knows no overflow
+// occurred.
+//
+// If elements is positive, it is used to ensure the resulting slice is
+// bounded above by that many number of elements (inclusive).
+func SafeParseIntSlice(in interface{}, elements int) ([]int, error) {
+	raw, err := SafeParseIntSliceRange(in, math.MinInt, math.MaxInt, elements)
+	if err != nil || raw == nil {
+		return nil, err
+	}
+
+	var result = make([]int, 0, len(raw))
+	for _, element := range raw {
+		result = append(result, int(element))
+	}
+
+	return result, nil
 }

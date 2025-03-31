@@ -1,0 +1,13 @@
+language: go
+
+go:
+  - 1.12.x
+
+install:
+  - echo "no install step"
+
+script:
+  - go generate ./...
+  - go build ./...
+  - go vet ./...
+  - go test -race ./...

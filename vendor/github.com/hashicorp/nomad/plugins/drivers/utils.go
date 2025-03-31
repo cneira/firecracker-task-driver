@@ -1,3 +1,6 @@
+// Copyright (c) HashiCorp, Inc.
+// SPDX-License-Identifier: MPL-2.0
+
 package drivers
 
 import (
@@ -51,16 +54,20 @@ func taskConfigFromProto(pb *proto.TaskConfig) *TaskConfig {
 	return &TaskConfig{
 		ID:               pb.Id,
 		JobName:          pb.JobName,
+		JobID:            pb.JobId,
 		TaskGroupName:    pb.TaskGroupName,
 		Name:             pb.Name,
+		Namespace:        pb.Namespace,
+		NodeName:         pb.NodeName,
+		NodeID:           pb.NodeId,
 		Env:              pb.Env,
 		DeviceEnv:        pb.DeviceEnv,
-		rawDriverConfig:  pb.MsgpackDriverConfig,
 		Resources:        ResourcesFromProto(pb.Resources),
 		Devices:          DevicesFromProto(pb.Devices),
 		Mounts:           MountsFromProto(pb.Mounts),
 		User:             pb.User,
 		AllocDir:         pb.AllocDir,
+		rawDriverConfig:  pb.MsgpackDriverConfig,
 		StdoutPath:       pb.StdoutPath,
 		StderrPath:       pb.StderrPath,
 		AllocID:          pb.AllocId,
@@ -76,8 +83,12 @@ func taskConfigToProto(cfg *TaskConfig) *proto.TaskConfig {
 	pb := &proto.TaskConfig{
 		Id:                   cfg.ID,
 		JobName:              cfg.JobName,
+		JobId:                cfg.JobID,
 		TaskGroupName:        cfg.TaskGroupName,
 		Name:                 cfg.Name,
+		Namespace:            cfg.Namespace,
+		NodeName:             cfg.NodeName,
+		NodeId:               cfg.NodeID,
 		Env:                  cfg.Env,
 		DeviceEnv:            cfg.DeviceEnv,
 		Resources:            ResourcesToProto(cfg.Resources),
@@ -279,9 +290,11 @@ func MountFromProto(mount *proto.Mount) *MountConfig {
 	}
 
 	return &MountConfig{
-		TaskPath: mount.TaskPath,
-		HostPath: mount.HostPath,
-		Readonly: mount.Readonly,
+		TaskPath:        mount.TaskPath,
+		HostPath:        mount.HostPath,
+		Readonly:        mount.Readonly,
+		PropagationMode: mount.PropagationMode,
+		SELinuxLabel:    mount.SelinuxLabel,
 	}
 }
 
@@ -329,9 +342,11 @@ func MountToProto(mount *MountConfig) *proto.Mount {
 	}
 
 	return &proto.Mount{
-		TaskPath: mount.TaskPath,
-		HostPath: mount.HostPath,
-		Readonly: mount.Readonly,
+		TaskPath:        mount.TaskPath,
+		HostPath:        mount.HostPath,
+		Readonly:        mount.Readonly,
+		PropagationMode: mount.PropagationMode,
+		SelinuxLabel:    mount.SELinuxLabel,
 	}
 }
 

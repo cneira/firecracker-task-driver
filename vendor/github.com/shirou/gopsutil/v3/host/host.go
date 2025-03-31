@@ -11,6 +11,8 @@ import (
 	"github.com/shirou/gopsutil/v3/internal/common"
 )
 
+type Warnings = common.Warnings
+
 var invoke common.Invoker = common.Invoke{}
 
 // A HostInfoStat describes the host status.
@@ -58,6 +60,13 @@ func (u UserStat) String() string {
 func (t TemperatureStat) String() string {
 	s, _ := json.Marshal(t)
 	return string(s)
+}
+
+var enableBootTimeCache bool
+
+// EnableBootTimeCache change cache behavior of BootTime. If true, cache BootTime value. Default is false.
+func EnableBootTimeCache(enable bool) {
+	enableBootTimeCache = enable
 }
 
 func Info() (*InfoStat, error) {
@@ -154,4 +163,8 @@ func SensorsTemperatures() ([]TemperatureStat, error) {
 
 func timeSince(ts uint64) uint64 {
 	return uint64(time.Now().Unix()) - ts
+}
+
+func timeSinceMillis(ts uint64) uint64 {
+	return uint64(time.Now().UnixMilli()) - ts
 }

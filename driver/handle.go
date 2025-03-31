@@ -22,9 +22,9 @@ import (
 	"syscall"
 	"time"
 
-	firecracker "github.com/firecracker-microvm/firecracker-go-sdk"
+	"github.com/firecracker-microvm/firecracker-go-sdk"
 	hclog "github.com/hashicorp/go-hclog"
-	"github.com/hashicorp/nomad/client/stats"
+	"github.com/hashicorp/nomad/client/lib/cpustats"
 	"github.com/hashicorp/nomad/plugins/drivers"
 	"github.com/shirou/gopsutil/process"
 )
@@ -48,9 +48,9 @@ type taskHandle struct {
 	completedAt     time.Time
 	exitResult      *drivers.ExitResult
 
-	cpuStatsSys   *stats.CpuStats
-	cpuStatsUser  *stats.CpuStats
-	cpuStatsTotal *stats.CpuStats
+	cpuStatsSys   *cpustats.Tracker
+	cpuStatsUser  *cpustats.Tracker
+	cpuStatsTotal *cpustats.Tracker
 }
 
 func (h *taskHandle) TaskStatus() *drivers.TaskStatus {
